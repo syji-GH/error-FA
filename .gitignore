@@ -1,0 +1,13 @@
+# clasp 的登入憑證，絕對不能進 repo
+.clasprc.json
+apps-script/.clasprc.json
+
+# 本機覆寫用的設定（若你想在本機測試但不想改 config.js）
+assets/config.local.js
+
+# Claude Code 的本機權限設定，屬於個人機器的設定，不進 repo
+.claude/settings.local.json
+
+node_modules/
+.DS_Store
+Thumbs.db

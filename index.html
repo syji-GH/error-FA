@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>物料異常看板 · ecoco</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // ECOCO 品牌色注入 Tailwind（依 ECOCO_DESIGN.md）
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ecoco: {
+            orange:    '#FF5000',
+            'orange-d':'#E64800',
+            blue:      '#060E9F',
+            yellow:    '#FFCE00',
+            'light-blue':'#8EB9C9',
+            beige:     '#FAE0B8',
+            cyan:      '#0076A9',
+          },
+          page:   '#F7F9FC',
+          card:   '#F0F3F7',
+          ink:    '#1A1A1A',
+          ink2:   '#4B5563',
+          muted:  '#6B7280',
+          ph:     '#9CA3AF',
+          line:   '#E5E7EB',
+        },
+        fontFamily: {
+          sans: ['"Noto Sans TC"', 'system-ui', 'sans-serif'],
+        },
+        boxShadow: {
+          'ecoco-cta': '0 4px 16px rgba(255,80,0,0.3)',
+          'panel':     '0 10px 40px -10px rgba(0,0,0,0.12)',
+          'searchbar': '0 20px 60px -15px rgba(0,0,0,0.15)',
+        },
+      },
+    },
+  };
+</script>
+<link rel="stylesheet" href="assets/styles.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+
+<body class="bg-page text-ink font-sans antialiased">
+
+<!-- ══════════════ 登入閘門 ══════════════ -->
+<div id="gate" class="fixed inset-0 z-[60] bg-page flex items-center justify-center px-4">
+  <div class="w-full max-w-sm text-center">
+    <div class="mb-8">
+      <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-ink mb-5">
+        <span class="text-white font-black text-2xl tracking-tighter">FA</span>
+      </div>
+      <h1 class="text-2xl font-black tracking-tight text-ink">物料異常看板</h1>
+      <p class="mt-2 text-sm font-medium text-ink2 leading-relaxed">
+        採購 · 資材 &lt;&gt; 廠務部<br>異常回報與結案追蹤
+      </p>
+    </div>
+
+    <div class="bg-white rounded-2xl border border-line shadow-sm p-6">
+      <p class="text-[10px] font-bold tracking-widest uppercase text-muted mb-4">
+        請使用公司帳號登入
+      </p>
+      <div id="gsiButton" class="flex justify-center min-h-[44px]"></div>
+      <p class="mt-4 text-xs font-medium text-muted">
+        僅限 <span class="font-bold text-ink">@ecoco.xyz</span> 網域
+      </p>
+    </div>
+
+    <p id="gateError" class="mt-5 text-sm font-bold text-red-600 hidden"></p>
+
+    <div id="gateConfigWarn" class="mt-5 hidden text-left bg-white border border-line rounded-2xl p-4">
+      <p class="text-[10px] font-bold tracking-widest uppercase text-red-600 mb-2">尚未設定</p>
+      <p class="text-xs font-medium text-ink2 leading-relaxed">
+        請先在 <code class="font-mono bg-card px-1 rounded">assets/config.js</code>
+        填入 <code class="font-mono bg-card px-1 rounded">CLIENT_ID</code> 與
+        <code class="font-mono bg-card px-1 rounded">GAS_URL</code>。
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ App ══════════════ -->
+<div id="app" class="hidden min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 bg-white shadow-sm border-b border-line">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="h-16 flex items-center gap-3">
+        <a href="#/" class="flex items-center shrink-0 group">
+          <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-ink group-hover:bg-ecoco-orange transition-colors">
+            <span class="text-white font-black text-sm tracking-tighter">FA</span>
+          </span>
+          <span class="border-l-2 border-line pl-3 ml-3 text-xl font-black tracking-tighter uppercase hidden sm:block">
+            物料異常看板
+          </span>
+        </a>
+
+        <div class="flex-1"></div>
+
+        <button id="btnNew"
+          class="bg-ecoco-orange text-white font-bold text-[15px] rounded-full px-5 py-2
+                 shadow-ecoco-cta hover:bg-ecoco-orange-d hover:scale-105 transition-all">
+          <span class="hidden sm:inline">開新異常單</span><span class="sm:hidden">開單</span>
+        </button>
+
+        <div class="relative">
+          <button id="btnUser"
+            class="flex items-center gap-2 rounded-full pl-1 pr-2 py-1 hover:bg-card transition-colors">
+            <span id="userAvatar"
+              class="w-8 h-8 rounded-full bg-ecoco-blue text-white font-black text-sm flex items-center justify-center"></span>
+            <span id="userName" class="hidden md:block text-sm font-bold text-ink"></span>
+          </button>
+          <div id="userMenu"
+            class="hidden absolute right-0 mt-2 w-56 bg-white rounded-2xl border border-line shadow-panel p-2 z-50">
+            <div class="px-3 py-2 border-b border-line mb-1">
+              <p id="menuName" class="text-sm font-bold text-ink truncate"></p>
+              <p id="menuEmail" class="text-xs font-medium text-muted truncate"></p>
+              <p id="menuRole" class="mt-1.5 inline-block text-[10px] font-bold tracking-widest uppercase
+                                      bg-card text-ecoco-blue rounded-lg px-2.5 py-1"></p>
+            </div>
+            <a id="menuSheet" href="#" target="_blank" rel="noopener"
+               class="block px-3 py-2 rounded-xl text-sm font-medium text-ink2 hover:text-ink hover:bg-card transition-colors">
+              開啟線上試算表
+            </a>
+            <button id="btnLogout"
+              class="w-full text-left px-3 py-2 rounded-xl text-sm font-medium text-ink2 hover:text-ink hover:bg-card transition-colors">
+              登出
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Route outlet -->
+  <main id="view" class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8"></main>
+
+  <footer class="border-t border-line py-6">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <p class="text-xs font-medium text-muted">
+        ecoco 內部工具 · 資料儲存於公司 Google Sheets
+      </p>
+    </div>
+  </footer>
+</div>
+
+<!-- Modal 容器 -->
+<div id="modalRoot"></div>
+<!-- Toast 容器 -->
+<div id="toastRoot" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-[70] flex flex-col items-center gap-2"></div>
+
+<script src="assets/config.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/api.js"></script>
+<script src="assets/auth.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# repo 內一律存 LF。README 有提到「同事可以直接用 GitHub 網頁編輯器改一行就上線」，
+# 若讓 Windows 的 CRLF 進 repo，網頁編輯器改一次就會整檔變成 diff，很難看出真正改了什麼。
+* text=auto eol=lf

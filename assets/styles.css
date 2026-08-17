@@ -1,0 +1,36 @@
+/* 只放 Tailwind CDN 蓋不掉的少數樣式 —— 其餘一律用 utility class */
+
+:root { color-scheme: light; }
+
+body { -webkit-tap-highlight-color: transparent; }
+
+/* 橫向捲動的篩選列，不顯示捲軸 */
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+/* 描述、留言內文保留換行 */
+.prose-plain { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+.prose-plain a { color: #060E9F; text-decoration: underline; }
+
+/* 卡片進場 */
+@keyframes fa-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.fa-rise { animation: fa-rise .18s ease-out both; }
+
+/* Modal / Toast */
+@keyframes fa-pop { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
+.fa-pop { animation: fa-pop .2s cubic-bezier(.16,1,.3,1) both; }
+
+/* 骨架屏 */
+@keyframes fa-pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+.fa-skel { background: #F0F3F7; animation: fa-pulse 1.4s ease-in-out infinite; }
+
+/* Google 登入按鈕容器置中 */
+#gsiButton > div { margin: 0 auto; }
+
+/* 拖拉上傳區 hover 態 */
+.fa-drop.is-over { border-color: #FF5000; background: #FFF4EF; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fa-rise, .fa-pop, .fa-skel { animation: none; }
+  * { transition-duration: .01ms !important; }
+}
