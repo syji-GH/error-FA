@@ -6,6 +6,10 @@
 const CASE_STATUSES = ['待處理', '處理中', '暫緩', '已結案'];
 const CASE_TYPES = ['需追加採購', '廠商送錯', '料號變更', '物料異常', '其他'];
 
+// 「其他」是唯一豁免料號必填的類型：整批包裝、廠商交期這類異常本來就不對應
+// 單一料號，硬性要求只會讓開單的人隨便填一個，反而把資料弄髒。
+const TYPE_WITHOUT_PART_NO = '其他';
+
 function casesList(user, payload) {
   payload = payload || {};
   let rows = readAll('Cases');
@@ -162,8 +166,8 @@ function casesCreate(user, payload) {
   if (!type || CASE_TYPES.indexOf(type) === -1) {
     throw new AppError('BAD_REQUEST', '案件類型不正確');
   }
-  if (!partNo) {
-    throw new AppError('BAD_REQUEST', '請填寫料號');
+  if (!partNo && type !== TYPE_WITHOUT_PART_NO) {
+    throw new AppError('BAD_REQUEST', '請填寫料號（類型選「' + TYPE_WITHOUT_PART_NO + '」時可不填）');
   }
   if (description === undefined || description === null || !String(description).trim()) {
     throw new AppError('BAD_REQUEST', '請填寫描述');

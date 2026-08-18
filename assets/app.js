@@ -665,7 +665,7 @@
             '<div id="typeRow" class="flex flex-wrap gap-2">' + typeChips + '</div>' +
           '</div>' +
           '<div>' +
-            '<label class="' + lbl + '">料號 <span class="text-ecoco-orange">*</span></label>' +
+            '<label id="lblPartNo" class="' + lbl + '">料號 <span class="text-ecoco-orange">*</span></label>' +
             '<input id="fPartNo" class="' + UI.input + '" placeholder="例：A-1023">' +
           '</div>' +
           '<div>' +
@@ -699,11 +699,24 @@
 
     var $ = function (id) { return m.body.querySelector('#' + id); };
 
+    // 「其他」類型不強制填料號，標記與 placeholder 要跟著切換，
+    // 否則使用者看到星號卻送得出去（或反過來）會很困惑
+    function partNoOptional() { return chosenType === '其他'; }
+    function syncPartNoLabel() {
+      var el = $('lblPartNo');
+      if (!el) return;
+      el.innerHTML = partNoOptional()
+        ? '料號 <span class="text-muted">（選填）</span>'
+        : '料號 <span class="text-ecoco-orange">*</span>';
+      $('fPartNo').placeholder = partNoOptional() ? '此類型可不填' : '例：A-1023';
+    }
+
     // 類型 chip 單選
     m.body.querySelector('#typeRow').addEventListener('click', function (e) {
       var b = e.target.closest('.js-type');
       if (!b) return;
       chosenType = b.dataset.t;
+      syncPartNoLabel();
       m.body.querySelectorAll('.js-type').forEach(function (x) {
         var on = x === b;
         x.className = 'js-type rounded-full px-4 py-2 text-[13px] font-bold border transition-colors ' +
@@ -740,7 +753,9 @@
     m.footer.querySelector('#ncCancel').addEventListener('click', m.close);
     m.footer.querySelector('#ncOk').addEventListener('click', async function () {
       if (!chosenType) { UI.toast('請選擇異常類型', 'error'); return; }
-      if (!$('fPartNo').value.trim()) { UI.toast('請填寫料號', 'error'); return; }
+      if (!partNoOptional() && !$('fPartNo').value.trim()) {
+        UI.toast('請填寫料號', 'error'); return;
+      }
       if (!$('fDesc').value.trim()) { UI.toast('請填寫狀況說明', 'error'); return; }
 
       var btn = this;
