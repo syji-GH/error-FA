@@ -8,6 +8,15 @@ assets/config.local.js
 # Claude Code 的本機權限設定，屬於個人機器的設定，不進 repo
 .claude/settings.local.json
 
+# 部署用的實際 ID 記錄。這些不是密鑰（真正的權限由 Google 端控管），
+# 但也沒必要公開放在 public repo 讓人知道你的試算表在哪。
+SETUP-VALUES.local.md
+
 node_modules/
 .DS_Store
 Thumbs.db
+
+# clasp 的專案指標，裡面是 scriptId。跟 SPREADSHEET_ID 同一個道理：
+# 不是密鑰，但沒必要在 public repo 公開內部資源的位置。
+# scriptId 記在 SETUP-VALUES.local.md，新機器用 clasp clone <scriptId> 接回來。
+.clasp.json

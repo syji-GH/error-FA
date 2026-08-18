@@ -9,16 +9,16 @@
 window.CONFIG = {
   // Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID (Web application)
   // Authorized JavaScript origins 需加入 https://syji-gh.github.io
-  CLIENT_ID: 'REPLACE_ME.apps.googleusercontent.com',
+  CLIENT_ID: '89550253306-gb132v3u9jt5tgq26v2a1ddp7qo0vvgr.apps.googleusercontent.com',
 
   // Apps Script 部署後的 /exec 網址（Execute as: Me、Who has access: Anyone）
-  GAS_URL: 'REPLACE_ME',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbxzodTUWxwNGEMciGlxaBOXD3ngtGzvu3B8CYuYWuSfUeS_Y1496pyYTyVp-VGEkevH/exec',
 
   // 只是提示 Google 預選公司帳號用；真正的網域限制在後端 verifyIdToken() 做
   HD: 'ecoco.xyz',
 
-  // 線上試算表連結（選單「開啟線上試算表」用）
-  SHEET_URL: '',
+  // 線上試算表連結（右上角選單「開啟線上試算表」用）
+  SHEET_URL: 'https://docs.google.com/spreadsheets/d/1h1KhWXvt78rmRKk5hFxK07pAyzcR3WrpXe85VxvUlMY/edit',
 };
 
 /* ── 常數：需與 Apps Script 端一致 ───────────────────────────── */

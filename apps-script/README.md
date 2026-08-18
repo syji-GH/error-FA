@@ -24,10 +24,18 @@
 兩種都可以，這個工具建議用「獨立專案」（不綁在 Sheets 檔案裡），管理比較清楚：
 
 ```bash
-npm install -g @google/clasp
+npm install -g @google/clasp     # 或每次都用 npx --yes @google/clasp
 clasp login
-clasp create --type webapp --title "error-FA" --rootDir ./apps-script
+clasp create --type standalone --title "error-FA" --rootDir ./apps-script
 ```
+
+> **兩個一定會踩到的坑（實際跑過確認）：**
+>
+> 1. `--type webapp` 在 clasp 3.x 會回 `Invalid container file type`。
+>    3.x 的 `--type` 只吃容器類型（sheets/docs/…）與 `standalone`，
+>    「網頁應用程式」是**部署**時才決定的事，不是建立專案時。用 `standalone` 就對了。
+> 2. 第一次用 clasp 會回 `User has not enabled the Apps Script API`。
+>    到 https://script.google.com/home/usersettings 把開關打開，等一分鐘再重跑。
 
 如果偏好綁定在試算表裡（開 Sheets → 擴充功能 → Apps Script），
 也可以先在 Sheets 裡建立綁定專案，再用 `clasp clone <scriptId>` 把 scriptId 接到這個資料夾。
@@ -42,10 +50,13 @@ clasp create --type webapp --title "error-FA" --rootDir ./apps-script
 
 ```bash
 cd apps-script
-clasp push          # 把本機檔案推上 Apps Script（會整批覆蓋雲端程式碼，以本機為準）
-clasp open           # 在瀏覽器開啟 Apps Script 編輯器，方便手動測試 / 看 log
+clasp push           # 把本機檔案推上 Apps Script（會整批覆蓋雲端程式碼，以本機為準）
+clasp open-script    # 在瀏覽器開啟 Apps Script 編輯器，方便手動測試 / 看 log
 clasp deploy -i <DEPLOYMENT_ID> -d "說明文字"   # 更新既有部署（見下方「部署地雷」，一定要帶 -i）
 ```
+
+> 指令名稱以 clasp 3.x 為準（本專案用 3.3.0 驗過）。
+> clasp 2.x 的 `clasp open` 在 3.x 改名為 `open-script`，其餘指令相同。
 
 平常開發：改本機檔案 → `clasp push` → 在編輯器裡執行 `setupSheets()` 或個別函式測試 → 沒問題再 `clasp deploy -i`。
 `clasp push` 只更新程式碼，**不會**更新 `/exec` 網址對外行為，那是 `clasp deploy` 的事——這正是下面地雷的成因。
