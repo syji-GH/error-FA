@@ -208,19 +208,30 @@
 
   /* ══════════════ 列表頁 ══════════════ */
 
-  async function renderList() {
+  function listQuery() {
+    return {
+      status: state.filter.status,
+      type: state.filter.type,
+      q: state.filter.q,
+      mine: state.filter.mine,
+      limit: 100,
+      withStats: true,   // 統計跟清單一起回，省一趟往返
+    };
+  }
+
+  /** preloaded 是開站那一趟已經拿到的結果，有的話就不再打一次 API */
+  async function renderList(preloaded) {
     view.innerHTML = statBar(state.stats) + filterBar() +
       '<div id="caseList" class="mt-5">' + UI.skeleton(4) + '</div>';
     bindFilterBar();
 
     try {
-      var res = await API.listCases({
-        status: state.filter.status,
-        type: state.filter.type,
-        q: state.filter.q,
-        mine: state.filter.mine,
-        limit: 100,
-      });
+      var res = preloaded || await API.listCases(listQuery());
+      if (res.stats) {
+        state.stats = res.stats;
+        var sb = document.getElementById('statBar');
+        if (sb) sb.outerHTML = statBar(state.stats);
+      }
       state.cases = res.items || [];
       var box = document.getElementById('caseList');
       if (!box) return;
@@ -764,12 +775,16 @@
     var m = hash.match(/^#\/case\/(.+)$/);
     window.scrollTo(0, 0);
     if (m) return renderDetail(decodeURIComponent(m[1]));
-    await refreshStats();
-    return renderList();
-  }
 
-  async function refreshStats() {
-    try { state.stats = await API.stats(); } catch (e) { state.stats = null; }
+    // 開站的第一次渲染直接用 session.login/resume 那趟帶回來的資料，不再多打 API
+    var boot = Auth.takeBoot();
+    if (boot) {
+      state.stats = boot.stats || null;
+      pendingMeta = boot.meta || null;
+      applyMeta(pendingMeta);
+      return renderList(boot.list);
+    }
+    return renderList();
   }
 
   /* ══════════════ 啟動 ══════════════ */
@@ -796,6 +811,16 @@
     document.getElementById('btnNew').addEventListener('click', openNewCase);
   }
 
+  function applyMeta(meta) {
+    if (!meta) return;
+    state.members = meta.members || [];
+    if (meta.config && meta.config.sheetUrl && !window.CONFIG.SHEET_URL) {
+      var el = document.getElementById('menuSheet');
+      if (el) { el.href = meta.config.sheetUrl; el.classList.remove('hidden'); }
+    }
+  }
+
+  var pendingMeta = null;
   var started = false;
 
   Auth.init(function (u) {
@@ -804,15 +829,7 @@
       started = true;
       bindHeader(u);
       window.addEventListener('hashchange', route);
-      // bootstrap 失敗不擋畫面：只是拿不到 Sheet 連結與成員清單而已
-      API.bootstrap().then(function (b) {
-        state.members = b.members || [];
-        if (b.config && b.config.sheetUrl && !window.CONFIG.SHEET_URL) {
-          var s = document.getElementById('menuSheet');
-          s.href = b.config.sheetUrl;
-          s.classList.remove('hidden');
-        }
-      }).catch(function () {});
+      applyMeta(pendingMeta);
     }
     route();
   });

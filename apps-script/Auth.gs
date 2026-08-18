@@ -9,8 +9,9 @@
  *      不再依賴 Google token 或每次都打 tokeninfo。
  *   3. session 記錄同時放 CacheService（快，上限 6 小時）與 Script Properties
  *      （慢但撐得滿 12 小時），requireAuth 兩邊都會查，Cache 沒中才查 Properties。
- *   4. 角色一律「即時」查 Members 分頁，不信任 session 裡存的舊角色——
- *      這樣管理員在 Sheet 改權限，下一個請求就生效，不用等 session 過期。
+ *   4. 角色一律重查 Members 分頁，不信任 session 裡存的舊角色，這樣管理員在
+ *      Sheet 改權限不用等 session 過期就會生效（查詢本身有 60 秒快取，見
+ *      ROLE_CACHE_TTL_SEC，所以實際上最慢一分鐘生效）。
  *
  * 絕不信任前端傳來的 email / 姓名 / 角色——一律從驗證過的 token claims
  * 或 session 記錄裡的 email 去查 Members，角色永遠從 Sheet 來。
@@ -98,7 +99,36 @@ function verifyIdToken(idToken) {
  *  - 名單裡有，但 active 明確是 FALSE → 直接擋下（FORBIDDEN）
  *  - 名單裡有且 active 是 TRUE 或空白 → 用名單上的 role/dept
  */
+const ROLE_CACHE_TTL_SEC = 60;   // 角色改了最多 60 秒生效，換來每個請求少讀一整張 Members
+
+/**
+ * resolveUser 會被「每一個」請求呼叫，而它要讀整張 Members。
+ * 用 CacheService 快取 60 秒：管理員在 Sheet 改角色，最慢一分鐘生效，
+ * 這個延遲對權限調整來說完全可以接受，但省下的是每個請求一次整表讀取。
+ */
 function resolveUser(profile) {
+  const email = String(profile.email).toLowerCase();
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'role_' + email;
+
+  const hit = cache.get(cacheKey);
+  if (hit) {
+    const cached = JSON.parse(hit);
+    if (cached.inactive) {
+      throw new AppError('FORBIDDEN', '這個帳號已被停用，請聯絡系統管理員');
+    }
+    // name 以當下 token 帶來的為準，其餘用快取的
+    return { email: profile.email, name: cached.name || profile.name || profile.email,
+             dept: cached.dept, role: cached.role };
+  }
+
+  const resolved = resolveUserUncached_(profile);
+  cache.put(cacheKey, JSON.stringify({ name: resolved.name, dept: resolved.dept, role: resolved.role }),
+            ROLE_CACHE_TTL_SEC);
+  return resolved;
+}
+
+function resolveUserUncached_(profile) {
   const members = readAll('Members');
   const email = String(profile.email).toLowerCase();
   const match = members.find(function (m) { return String(m.email || '').toLowerCase() === email; });
@@ -109,6 +139,8 @@ function resolveUser(profile) {
 
   const isActiveFalse = match.active === false || String(match.active).toUpperCase() === 'FALSE';
   if (isActiveFalse) {
+    CacheService.getScriptCache().put('role_' + email, JSON.stringify({ inactive: true }),
+                                      ROLE_CACHE_TTL_SEC);
     throw new AppError('FORBIDDEN', '這個帳號已被停用，請聯絡系統管理員');
   }
 
@@ -135,6 +167,7 @@ function resolveOrProvisionUser_(profile) {
       notify: false,
       active: true
     });
+    CacheService.getScriptCache().remove('role_' + email);
     return { email: profile.email, name: profile.name || profile.email, dept: '', role: 'staff' };
   }
 
@@ -182,16 +215,22 @@ function sessionLogin(user, payload) {
 
   storeSession_(sessionKey_(token), record);
 
-  return {
+  const out = {
     user: { email: resolved.email, name: resolved.name, role: resolved.role, dept: resolved.dept },
     sessionToken: token,
     expiresAt: new Date(exp).toISOString()
   };
+  // 前端開站時一併把首頁要的東西帶回去，省掉三趟往返（見 Code.gs buildBoot_）
+  if (payload.boot) out.boot = buildBoot_(resolved, payload.list);
+  return out;
 }
 
 /** session.resume：requireAuth 已經驗完 session 並即時重讀 Members 角色，這裡直接回傳即可。 */
-function sessionResume(user) {
-  return { user: { email: user.email, name: user.name, role: user.role, dept: user.dept } };
+function sessionResume(user, payload) {
+  payload = payload || {};
+  const out = { user: { email: user.email, name: user.name, role: user.role, dept: user.dept } };
+  if (payload.boot) out.boot = buildBoot_(user, payload.list);
+  return out;
 }
 
 /** session.logout：把這個 session token 從 Cache + Properties 都刪掉。 */

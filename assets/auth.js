@@ -19,6 +19,7 @@ window.Auth = (function () {
   var user = null;          // { email, name, role, dept } —— 來自後端，權威來源
   var onReady = null;
   var reauthPending = null;
+  var bootData = null;      // 開站那一趟順便帶回來的 stats/list/meta，只給第一次渲染用
 
   /* ── session 保存 ─────────────────────────────────────── */
   // 用 sessionStorage 而非 localStorage：現場電腦是共用的，關掉分頁就登出比較安全
@@ -51,9 +52,12 @@ window.Auth = (function () {
   async function handleCredential(resp) {
     if (!resp || !resp.credential) return;
     try {
-      var data = await window.API.login(resp.credential);
+      // 重新驗證的情境不需要 boot 包，只有真正開站才要
+      var wantBoot = !reauthPending;
+      var data = await window.API.login(resp.credential, wantBoot);
       saveSession(data.sessionToken, data.expiresAt);
       user = data.user;
+      if (data.boot) bootData = data.boot;
 
       // 有人在等重新驗證就先餵給他
       if (reauthPending) { reauthPending.resolve(sessionToken); reauthPending = null; return; }
@@ -177,9 +181,10 @@ window.Auth = (function () {
     var saved = loadSession();
     if (saved) {
       try {
-        var data = await window.API.resume(saved);
+        var data = await window.API.resume(saved, true);
         sessionToken = saved;
         user = data.user;
+        if (data.boot) bootData = data.boot;
         enterApp();
         return;
       } catch (e) {
@@ -196,6 +201,8 @@ window.Auth = (function () {
     reauth: reauth,
     getSessionToken: getSessionToken,
     getUser: getUser,
+    /** 取走開站那一趟帶回來的資料，只能取一次——之後的重繪一律走正常 API */
+    takeBoot: function () { var b = bootData; bootData = null; return b; },
     is: is,
     canManage: canManage,
   };

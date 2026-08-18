@@ -101,8 +101,9 @@ window.API = (function () {
     ping: function () { return raw('ping', {}, ''); },
 
     /* session（由 auth.js 使用） */
-    login:  function (idToken) { return raw('session.login', { idToken: idToken }, ''); },
-    resume: function (token)   { return raw('session.resume', {}, token); },
+    // boot:true 會讓後端一併回傳首頁要的 stats/list/meta，省掉三趟往返
+    login:  function (idToken, boot) { return raw('session.login', { idToken: idToken, boot: !!boot }, ''); },
+    resume: function (token, boot)   { return raw('session.resume', { boot: !!boot }, token); },
     logout: function (token)   { return raw('session.logout', {}, token); },
 
     /* 業務 action —— 名稱與 apps-script 端一一對應 */

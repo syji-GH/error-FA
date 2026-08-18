@@ -3,19 +3,43 @@
  * 欄位順序異動不會壞掉整支程式；寫入一律檢查欄位是否存在（allow-list）。
  */
 
+/*
+ * 單次執行內的快取。
+ *
+ * 每個 doPost 都是一次全新的 Apps Script 執行，所以這些變數的生命週期
+ * 就是「這一個請求」，不會有跨使用者污染的問題。
+ *
+ * 為什麼需要：openById 與 getRange().getValues() 都是實際的 Google API 往返，
+ * 而同一個請求裡常常重複讀同一張表（例如 cases.get 會讀 Members/Cases/
+ * Comments/Attachments/History，每個 readAll 又各自 openById 一次）。
+ * 沒有快取的話，一個請求可能就是十幾趟 API。
+ */
+let SS_CACHE_ = null;
+const SHEET_CACHE_ = {};
+const READ_CACHE_ = {};
+
+/** 寫入之後一定要讓該分頁的讀取快取失效，否則同一請求內後續的讀會拿到舊資料。 */
+function invalidateSheetCache_(name) {
+  delete READ_CACHE_[name];
+}
+
 function getSS() {
+  if (SS_CACHE_) return SS_CACHE_;
   const id = getSpreadsheetId_();
   if (!id || id === 'REPLACE_ME') {
     throw new AppError('INTERNAL', '尚未設定 SPREADSHEET_ID，請聯絡系統管理員');
   }
-  return SpreadsheetApp.openById(id);
+  SS_CACHE_ = SpreadsheetApp.openById(id);
+  return SS_CACHE_;
 }
 
 function sheet(name) {
+  if (SHEET_CACHE_[name]) return SHEET_CACHE_[name];
   const sh = getSS().getSheetByName(name);
   if (!sh) {
     throw new AppError('INTERNAL', '找不到分頁：' + name + '，請先執行「初始化工作表」');
   }
+  SHEET_CACHE_[name] = sh;
   return sh;
 }
 
@@ -30,8 +54,9 @@ function normalizeCell_(v) {
   return v;
 }
 
-/** 讀整個分頁，回傳「表頭 → 值」的物件陣列；全空白列會被跳過。 */
+/** 讀整個分頁，回傳「表頭 → 值」的物件陣列；全空白列會被跳過。同一請求內只實際讀一次。 */
 function readAll(name) {
+  if (READ_CACHE_[name]) return READ_CACHE_[name];
   const sh = sheet(name);
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
@@ -51,6 +76,7 @@ function readAll(name) {
     }
     out.push(obj);
   }
+  READ_CACHE_[name] = out;
   return out;
 }
 
@@ -73,6 +99,7 @@ function appendRow(name, obj) {
     return (v === undefined || v === null) ? '' : v;
   });
   sh.appendRow(row);
+  invalidateSheetCache_(name);
   return obj;
 }
 
@@ -105,6 +132,7 @@ function updateRowById(name, idColumn, id, patch) {
     result[h] = normalizeCell_(values[c]);
   }
   rowRange.setValues([values]);
+  invalidateSheetCache_(name);
   return result;
 }
 
@@ -115,6 +143,7 @@ function deleteRowById(name, idColumn, id) {
   const rowIdx = findRowIndexById_(sh, headers, idColumn, id);
   if (rowIdx === -1) throw new AppError('NOT_FOUND', name + ' 找不到 ' + idColumn + '=' + id);
   sh.deleteRow(rowIdx);
+  invalidateSheetCache_(name);
 }
 
 function getRowById(name, idColumn, id) {

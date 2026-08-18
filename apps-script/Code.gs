@@ -26,7 +26,7 @@ const SPREADSHEET_ID = 'REPLACE_ME';
 
 // 每次部署前手動 +1（或改成日期字串），doGet 會回傳這個版本號，
 // 一看就知道 /exec 上線的是哪一版，避免部署到錯的 deployment id 卻沒發現。
-const SCRIPT_VERSION = '2026-08-18.2';
+const SCRIPT_VERSION = '2026-08-18.3';
 
 // 案件描述 / 留言內容都是純文字（前端用 white-space:pre-wrap 顯示，自動連結網址），
 // 不接受也不需要 HTML，這裡只做長度上限保護。
@@ -173,6 +173,22 @@ function errorEnvelope_(err) {
   }
   console.error(err && err.stack ? err.stack : err);
   return { ok: false, error: { code: 'INTERNAL', message: '系統發生未預期的錯誤，請稍後再試' } };
+}
+
+/**
+ * buildBoot_ — 開站時一次把首頁要的東西全部包好。
+ *
+ * 為什麼要合併：Apps Script 的 /exec 每次往返固定 ~1.15 秒（實測，其中大半是
+ * 回應前那個 302 轉址），跟後端做了多少事幾乎無關。原本開站要跑
+ * session.resume → cases.stats → cases.list → meta.bootstrap 四趟、而且前兩趟
+ * 是串行的，光固定成本就 3.5 秒以上。合併成一趟之後固定成本只剩一份。
+ */
+function buildBoot_(user, listPayload) {
+  return {
+    stats: casesStats(user, {}),
+    list: casesList(user, listPayload || {}),
+    meta: metaBootstrap(user, {})
+  };
 }
 
 /**

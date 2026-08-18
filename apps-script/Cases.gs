@@ -42,7 +42,11 @@ function casesList(user, payload) {
     return copy;
   });
 
-  return { items: items, total: rows.length };
+  const out = { items: items, total: rows.length };
+  // 篩選條件一改，統計卡也要跟著更新。與其讓前端再跑一趟（固定成本 ~1.15 秒），
+  // 不如順手算完一起回去——反正 Cases 這張表在同一個請求裡已經讀進記憶體了。
+  if (payload.withStats) out.stats = casesStats(user, {});
+  return out;
 }
 
 /** 只挑圖片附件，依案號分組、依上傳時間新到舊排序，每案最多留 3 張，給列表卡片當縮圖用。 */
