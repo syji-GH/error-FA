@@ -115,10 +115,15 @@ function notifyNewComment(caseRow, commentRow, actor) {
   try {
     const link = caseLink_(caseRow.caseId);
     const subject = '[error-FA] ' + caseRow.caseId + ' 有新留言：' + commentRow.authorName + ' 說……';
+    // 只有附件、沒有文字的留言是允許的，這時不要印出空白的引言區塊
+    const hasText = String(commentRow.body || '').trim() !== '';
     const body = escapeHtml_(commentRow.authorName) + '（' + escapeHtml_(commentRow.authorEmail) +
-      '）在案件「' + escapeHtml_(caseRow.title) + '」留言：<br>' +
-      '<blockquote style="margin:8px 0;padding:8px 12px;background:#F7F9FC;border-left:3px solid #FF5000;' +
-      'white-space:pre-wrap;">' + escapeHtml_(commentRow.body) + '</blockquote>';
+      '）在案件「' + escapeHtml_(caseRow.title) + '」' +
+      (hasText
+        ? '留言：<br><blockquote style="margin:8px 0;padding:8px 12px;background:#F7F9FC;' +
+          'border-left:3px solid #FF5000;white-space:pre-wrap;">' +
+          escapeHtml_(commentRow.body) + '</blockquote>'
+        : '上傳了附件（未輸入文字），請點下方連結查看。');
     const html = emailHtml_(subject, body, link);
 
     const recipients = [caseRow.createdBy, caseRow.assignee];

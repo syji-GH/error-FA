@@ -122,8 +122,18 @@ Apps Script 編輯器 → 右上「部署」→「新增部署作業」（第一
    ```
 
 3. `Code.gs` 頂端的 `SCRIPT_VERSION` 常數，每次部署前手動 +1（或改成日期字串）。
-   `doGet` 會回傳 `{ ok:true, data:{ service:'error-FA', version:SCRIPT_VERSION } }`——
-   部署完直接瀏覽器開 `/exec` 網址，version 對不上預期值，就代表部署錯了 deployment 或忘記帶 `-i`。
+   確認版本要用 **POST `ping`**，不要用瀏覽器直接開 `/exec`：
+
+   ```bash
+   curl -sL -H "Content-Type: text/plain;charset=utf-8" -d '{"action":"ping"}' <EXEC_URL>
+   # → {"ok":true,"data":{"pong":true,"now":"...","version":"2026-08-18.2"}}
+   ```
+
+   **Google 會快取 `/exec` 的 GET 回應**，實測即使加上 `?t=<timestamp>` 或
+   `Cache-Control: no-cache` 也一樣回舊版本號，所以 `doGet` 不能拿來判斷部署是否生效
+   （這點是實際踩過才發現的——`doGet` 回舊值但 POST 回新值）。
+   `doGet` 現在只留著當「服務有沒有活著」的健康檢查。
+   version 對不上預期值，代表部署錯了 deployment 或忘記帶 `-i`。
 
 ## 5. Google Cloud Console — OAuth Client ID
 

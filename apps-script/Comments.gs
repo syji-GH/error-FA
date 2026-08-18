@@ -9,8 +9,15 @@ function commentsCreate(user, payload) {
   const body = payload.body;
 
   if (!caseId) throw new AppError('BAD_REQUEST', '缺少 caseId');
-  if (!body || !String(body).trim()) throw new AppError('BAD_REQUEST', '留言內容不可為空');
-  if (String(body).length > MAX_TEXT_LEN) {
+
+  // 「文字」或「附件」有一個就成立，不強制兩者都要。
+  // 現場拍完照直接上傳、一個字都不打，是最常見的用法。
+  const hasAttachments = Array.isArray(payload.attachments) && payload.attachments.length > 0;
+  const bodyText = (body === undefined || body === null) ? '' : String(body);
+  if (!bodyText.trim() && !hasAttachments) {
+    throw new AppError('BAD_REQUEST', '請輸入內容，或附加至少一個檔案');
+  }
+  if (bodyText.length > MAX_TEXT_LEN) {
     throw new AppError('BAD_REQUEST', '留言內容過長（上限 ' + MAX_TEXT_LEN + ' 字）');
   }
 
@@ -27,7 +34,7 @@ function commentsCreate(user, payload) {
     createdAt: now,
     authorEmail: user.email,
     authorName: user.name,
-    body: body,
+    body: bodyText,
     isEdited: false,
     editedAt: '',
     isDeleted: false
@@ -35,7 +42,7 @@ function commentsCreate(user, payload) {
   appendRow('Comments', commentRow);
 
   let savedCount = 0;
-  if (Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+  if (hasAttachments) {
     savedCount = saveAttachments(caseId, commentId, payload.attachments, user).length;
   }
 

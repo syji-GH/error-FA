@@ -524,8 +524,10 @@
           '<span class="ml-auto text-xs font-medium text-muted shrink-0">' +
             esc(UI.fmtRelative(cm.createdAt)) + (cm.isEdited ? '（已編輯）' : '') + '</span>' +
         '</div>' +
-        '<div class="mt-3 prose-plain text-sm font-medium text-ink2 leading-relaxed">' +
-          UI.linkify(cm.body) + '</div>' +
+        (String(cm.body || '').trim()
+          ? '<div class="mt-3 prose-plain text-sm font-medium text-ink2 leading-relaxed">' +
+            UI.linkify(cm.body) + '</div>'
+          : '') +
         attachmentGrid(own) +
         (mine ? '<div class="mt-3 flex gap-1">' +
           '<button data-edit="' + esc(cm.commentId) + '" class="text-xs font-bold text-muted hover:text-ink px-2 py-1 rounded-full hover:bg-card">編輯</button>' +
