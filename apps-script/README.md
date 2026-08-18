@@ -197,7 +197,9 @@ Apps Script 編輯器 → 右上「部署」→「新增部署作業」（第一
   session token，**不是** Google ID token；`requestId` 建議每次寫入類 action 都帶一個新的 UUID
   （冪等保護，600 秒內同一個 requestId 重送會拿到原本那次的結果，不會重複執行）。
 - `ping` 和 `session.login` 是唯二不需要 `token` 的 action。
-- Session 效期 12 小時；`token` 失效時任何 action 都會回
+- Session 效期 12 小時（絕對壽命，不會因為持續使用而延長）；前端另有一層閒置逾時，
+  預設 60 分鐘沒操作就自動登出，見 `assets/config.js` 的 `IDLE_MINUTES`。
+- `token` 失效時任何 action 都會回
   `{ ok:false, error:{ code:'UNAUTHENTICATED', ... } }`，前端收到就導回登入畫面重新
   `session.login`。
 - Content-Type 一定要用 `text/plain;charset=utf-8`（見第 4 節「為什麼一定要選任何人」）。

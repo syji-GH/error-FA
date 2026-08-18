@@ -17,6 +17,10 @@ window.CONFIG = {
   // 只是提示 Google 預選公司帳號用；真正的網域限制在後端 verifyIdToken() 做
   HD: 'ecoco.xyz',
 
+  // 閒置多久自動登出（分鐘）。現場是共用電腦，登入狀態放在 localStorage 跨分頁共用，
+  // 靠這個閒置逾時把「同事接手同一台電腦」的風險擋掉。設 0 表示不啟用閒置逾時。
+  IDLE_MINUTES: 60,
+
   // 線上試算表連結（右上角選單「開啟線上試算表」用）
   SHEET_URL: 'https://docs.google.com/spreadsheets/d/1h1KhWXvt78rmRKk5hFxK07pAyzcR3WrpXe85VxvUlMY/edit',
 };
