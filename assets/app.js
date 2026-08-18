@@ -326,6 +326,11 @@
     }
   }
 
+  /** 標題是選填的，空白時退而用料號當標示（再不行才用案號） */
+  function caseLabel(c) {
+    return c.title || c.partNo || c.caseId;
+  }
+
   function caseCard(c) {
     var thumbs = (c.thumbs || []).slice(0, 3).map(function (a) {
       return '<span class="w-10 h-10 rounded-lg overflow-hidden border border-line bg-card block">' +
@@ -338,12 +343,17 @@
         UI.statusBadge(c.status) + UI.typeBadge(c.type) +
         '<span class="ml-auto text-[10px] font-bold tracking-widest text-muted">' + esc(c.caseId) + '</span>' +
       '</div>' +
-      '<h3 class="mt-3 text-base font-black tracking-tight text-ink line-clamp-2">' + esc(c.title) + '</h3>' +
-      ((c.partNo || c.vendor)
-        ? '<p class="mt-1.5 text-sm font-medium text-ink2 truncate">' +
-          [c.partNo ? '料號 ' + c.partNo : '', c.vendor ? '廠商 ' + c.vendor : '']
-            .filter(Boolean).map(esc).join(' · ') + '</p>'
-        : '') +
+      '<h3 class="mt-3 text-base font-black tracking-tight text-ink line-clamp-2">' + esc(caseLabel(c)) + '</h3>' +
+      // 標題空白時上面那行已經是料號了，這裡就不要再印一次
+      (function () {
+        var parts = [];
+        if (c.partNo && c.title) parts.push('料號 ' + c.partNo);
+        if (c.vendor) parts.push('廠商 ' + c.vendor);
+        return parts.length
+          ? '<p class="mt-1.5 text-sm font-medium text-ink2 truncate">' +
+            parts.map(esc).join(' · ') + '</p>'
+          : '';
+      })() +
       (thumbs ? '<div class="mt-3 flex gap-1.5">' + thumbs + '</div>' : '') +
       '<div class="mt-4 pt-3 border-t border-[#F0F3F7] flex items-center gap-2 text-xs font-medium text-muted">' +
         UI.avatar(c.createdByName, c.createdBy, 'sm') +
@@ -383,7 +393,7 @@
               UI.statusBadge(c.status) + UI.typeBadge(c.type) +
               '<span class="ml-auto text-[10px] font-bold tracking-widest text-muted">' + esc(c.caseId) + '</span>' +
             '</div>' +
-            '<h1 class="mt-3 text-xl font-black tracking-tight text-ink">' + esc(c.title) + '</h1>' +
+            '<h1 class="mt-3 text-xl font-black tracking-tight text-ink">' + esc(caseLabel(c)) + '</h1>' +
             '<div class="mt-3 flex items-center gap-2 text-xs font-medium text-muted">' +
               UI.avatar(c.createdByName, c.createdBy, 'sm') +
               '<span class="font-bold text-ink2">' + esc(c.createdByName || c.createdBy) + '</span>' +
@@ -655,11 +665,14 @@
             '<div id="typeRow" class="flex flex-wrap gap-2">' + typeChips + '</div>' +
           '</div>' +
           '<div>' +
-            '<label class="' + lbl + '">標題 <span class="text-ecoco-orange">*</span></label>' +
-            '<input id="fTitle" class="' + UI.input + '" placeholder="例：A-1023 螺絲規格不符，無法組裝">' +
+            '<label class="' + lbl + '">料號 <span class="text-ecoco-orange">*</span></label>' +
+            '<input id="fPartNo" class="' + UI.input + '" placeholder="例：A-1023">' +
+          '</div>' +
+          '<div>' +
+            '<label class="' + lbl + '">標題</label>' +
+            '<input id="fTitle" class="' + UI.input + '" placeholder="選填，不填就用料號顯示">' +
           '</div>' +
           '<div class="grid grid-cols-2 gap-3">' +
-            '<div><label class="' + lbl + '">料號</label><input id="fPartNo" class="' + UI.input + '"></div>' +
             '<div><label class="' + lbl + '">品名</label><input id="fPartName" class="' + UI.input + '"></div>' +
             '<div><label class="' + lbl + '">廠商</label><input id="fVendor" class="' + UI.input + '"></div>' +
             '<div><label class="' + lbl + '">採購單號</label><input id="fPoNo" class="' + UI.input + '"></div>' +
@@ -727,7 +740,7 @@
     m.footer.querySelector('#ncCancel').addEventListener('click', m.close);
     m.footer.querySelector('#ncOk').addEventListener('click', async function () {
       if (!chosenType) { UI.toast('請選擇異常類型', 'error'); return; }
-      if (!$('fTitle').value.trim()) { UI.toast('請填寫標題', 'error'); return; }
+      if (!$('fPartNo').value.trim()) { UI.toast('請填寫料號', 'error'); return; }
       if (!$('fDesc').value.trim()) { UI.toast('請填寫狀況說明', 'error'); return; }
 
       var btn = this;

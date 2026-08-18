@@ -153,14 +153,17 @@ function nextCaseId_() {
 function casesCreate(user, payload) {
   payload = payload || {};
   const type = payload.type;
-  const title = payload.title && String(payload.title).trim();
+  // 標題改為選填：現場開單時料號才是關鍵識別，標題常常只是重複料號。
+  // 空白時前端會退而顯示料號（見 app.js 的 caseLabel）。
+  const title = payload.title ? String(payload.title).trim() : '';
+  const partNo = payload.partNo ? String(payload.partNo).trim() : '';
   const description = payload.description;
 
   if (!type || CASE_TYPES.indexOf(type) === -1) {
     throw new AppError('BAD_REQUEST', '案件類型不正確');
   }
-  if (!title) {
-    throw new AppError('BAD_REQUEST', '請填寫標題');
+  if (!partNo) {
+    throw new AppError('BAD_REQUEST', '請填寫料號');
   }
   if (description === undefined || description === null || !String(description).trim()) {
     throw new AppError('BAD_REQUEST', '請填寫描述');
@@ -180,7 +183,7 @@ function casesCreate(user, payload) {
     dept: user.dept || '',
     type: type,
     title: title,
-    partNo: payload.partNo || '',
+    partNo: partNo,
     partName: payload.partName || '',
     vendor: payload.vendor || '',
     poNo: payload.poNo || '',
