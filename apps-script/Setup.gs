@@ -113,6 +113,36 @@ function ensureDailyPurgeTrigger() {
 }
 
 /**
+ * 診斷用：新開單的通知會寄給誰？順便回報今天還剩多少寄信額度。
+ * 在編輯器直接執行，看「執行紀錄」的輸出即可，不用真的開一張單去試。
+ */
+function whoGetsNewCaseMail() {
+  const group = getConfig('facilityGroupEmail');
+  const recipients = newCaseRecipients_();
+  const quota = MailApp.getRemainingDailyQuota();
+
+  const lines = [
+    'Config.facilityGroupEmail = ' + (group || '(未設定)'),
+    '今日剩餘寄信額度 = ' + quota,
+    '收件人共 ' + recipients.length + ' 個：' + (recipients.length ? recipients.join(', ') : '(空的，所以不會寄出任何信)')
+  ];
+
+  readAll('Members').forEach(function (m) {
+    const notify = m.notify === true || String(m.notify).toUpperCase() === 'TRUE';
+    const inactive = m.active === false || String(m.active).toUpperCase() === 'FALSE';
+    lines.push('  - ' + m.email + '  role=' + (m.role || 'staff') +
+               '  notify=' + (notify ? 'TRUE' : 'FALSE') +
+               (inactive ? '  (已停用)' : '') +
+               (notify && !inactive ? '  → 會收到' : '  → 不會收到'));
+  });
+
+  const out = lines.join('\n');
+  console.log(out);
+  notice_('收件人 ' + recipients.length + ' 個，詳見執行紀錄');
+  return out;
+}
+
+/**
  * onOpen 只有「綁定在試算表裡的專案」才會觸發。
  * 用獨立專案部署的話這個選單不會出現 —— 直接在 Apps Script 編輯器
  * 選 setupSheets / ensureDailyPurgeTrigger 執行即可，效果一樣。
@@ -122,5 +152,6 @@ function onOpen() {
     .createMenu('error-FA')
     .addItem('初始化工作表', 'setupSheets')
     .addItem('設定每日清理排程（Session）', 'ensureDailyPurgeTrigger')
+    .addItem('檢查通知收件人', 'whoGetsNewCaseMail')
     .addToUi();
 }

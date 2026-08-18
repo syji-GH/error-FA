@@ -75,13 +75,25 @@ function uniq_(arr) {
   return out;
 }
 
-function facilityRecipients_() {
+/**
+ * 新開單要通知誰。
+ *
+ * 規則：Config.facilityGroupEmail ＋ Members 裡所有「notify = TRUE 且未停用」的人。
+ *
+ * 原本還多加了一個 role === 'facility' 的條件，那是錯的：
+ * notify 這一欄看起來就是「要不要收通知」，但對非 facility 的人完全無效——
+ * admin 把 notify 打勾照樣收不到，欄位名稱跟行為對不上。
+ * 現在 notify 就是字面意思，任何角色都能自己訂閱。
+ */
+function newCaseRecipients_() {
   const list = [];
   const group = getConfig('facilityGroupEmail');
   if (group) list.push(group);
+
   readAll('Members').forEach(function (m) {
     const notify = m.notify === true || String(m.notify).toUpperCase() === 'TRUE';
-    if (m.role === 'facility' && notify && m.email) list.push(m.email);
+    const inactive = m.active === false || String(m.active).toUpperCase() === 'FALSE';
+    if (notify && !inactive && m.email) list.push(m.email);
   });
   return uniq_(list);
 }
@@ -102,7 +114,7 @@ function notifyNewCase(caseRow, actor) {
       '標題：' + escapeHtml_(caseRow.title);
     const html = emailHtml_(subject, body, link);
 
-    facilityRecipients_().forEach(function (email) {
+    newCaseRecipients_().forEach(function (email) {
       if (shouldSend_('case.created', caseRow.caseId, email)) sendMail_(email, subject, html);
     });
   } catch (err) {
