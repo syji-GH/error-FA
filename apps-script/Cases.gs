@@ -123,7 +123,7 @@ function casesGet(user, payload) {
 /** 取下一個案號：FA-<年度>-<4碼流水號>，年度變了流水號自動歸零。用 LockService 避免撞號。 */
 function nextCaseId_() {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) {
+  if (!lock.tryLock(10000)) {
     throw new AppError('CONFLICT', '系統忙碌中，請稍後再試（取得案號逾時）');
   }
   try {
@@ -260,7 +260,7 @@ function casesUpdate(user, payload) {
   }
 
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) {
+  if (!lock.tryLock(10000)) {
     throw new AppError('CONFLICT', '系統忙碌中，請稍後再試');
   }
   try {
@@ -318,7 +318,7 @@ function casesSetStatus(user, payload) {
   }
 
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) {
+  if (!lock.tryLock(10000)) {
     throw new AppError('CONFLICT', '系統忙碌中，請稍後再試');
   }
   try {
