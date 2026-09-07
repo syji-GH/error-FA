@@ -89,7 +89,42 @@ function assertKnownFields_(headers, obj, sheetName) {
   });
 }
 
-/** 依表頭順序把物件轉成一列寫入分頁最後。 */
+/*
+ * 「一定要當成純文字」的欄位。
+ *
+ * Sheets 會猜寫進去的字串是什麼型別，猜錯就是靜默的資料損毀，而且畫面上不會有錯誤：
+ *   - '=' 開頭 → 變成公式，讀回來是計算結果或 #NAME?，使用者打的字直接不見
+ *   - '0012345' → 變成數字 12345，前導零掉了（採購單號、純數字料號會中）
+ *   - '2026-09'、'3/4' → 變成日期值
+ * 案號的流水號就是這樣壞掉的（"2026:10" 被當成 h:mm，見 setConfig 的註解）。
+ *
+ * 只列真的必須是文字的欄位：時間戳、數量、檔案大小、計數、布林值不在裡面，
+ * 它們本來就該讓 Sheets 存成原生型別，讀取端的 normalizeCell_ 會處理。
+ */
+const TEXT_COLUMNS_ = {
+  Cases: ['caseId', 'createdBy', 'createdByName', 'dept', 'type', 'title', 'partNo',
+    'partName', 'vendor', 'poNo', 'unit', 'description', 'status', 'assignee',
+    'assigneeName', 'closedBy', 'resolution'],
+  Comments: ['commentId', 'caseId', 'parentId', 'authorEmail', 'authorName', 'body'],
+  Attachments: ['attId', 'caseId', 'commentId', 'fileName', 'mimeType', 'driveFileId',
+    'viewUrl', 'thumbUrl', 'uploadedBy', 'deletedBy'],
+  History: ['histId', 'caseId', 'actorEmail', 'actorName', 'action',
+    'fromValue', 'toValue', 'note', 'refId'],
+  Members: ['email', 'name', 'dept', 'role'],
+  Config: ['key', 'value']
+};
+
+function isTextColumn_(sheetName, header) {
+  const cols = TEXT_COLUMNS_[sheetName];
+  return !!cols && cols.indexOf(header) !== -1;
+}
+
+/**
+ * 依表頭順序把物件轉成一列寫入分頁最後。
+ *
+ * 不用 sh.appendRow()，因為格式一定要在寫值「之前」設好——先把文字欄位鎖成純文字，
+ * Sheets 才不會在寫入的當下就把字串猜成公式／數字／日期。
+ */
 function appendRow(name, obj) {
   const sh = sheet(name);
   const headers = headersOf_(sh);
@@ -98,7 +133,24 @@ function appendRow(name, obj) {
     const v = obj[h];
     return (v === undefined || v === null) ? '' : v;
   });
-  sh.appendRow(row);
+
+  const targetRow = sh.getLastRow() + 1;
+  const maxRows = sh.getMaxRows();
+  if (targetRow > maxRows) sh.insertRowsAfter(maxRows, targetRow - maxRows);
+
+  // 讀回整列現有格式再只改文字欄位，比逐格 setNumberFormat 少掉十幾趟 API 往返
+  const range = sh.getRange(targetRow, 1, 1, headers.length);
+  const formats = range.getNumberFormats()[0];
+  let touched = false;
+  headers.forEach(function (h, c) {
+    if (!isTextColumn_(name, h)) return;
+    if (formats[c] === '@') return;
+    formats[c] = '@';
+    touched = true;
+  });
+  if (touched) range.setNumberFormats([formats]);
+  range.setValues([row]);
+
   invalidateSheetCache_(name);
   return obj;
 }
@@ -126,11 +178,20 @@ function updateRowById(name, idColumn, id, patch) {
   const rowRange = sh.getRange(rowIdx, 1, 1, headers.length);
   const values = rowRange.getValues()[0];
   const result = {};
+  const lockCols = [];
   for (let c = 0; c < headers.length; c++) {
     const h = headers[c];
-    if (Object.prototype.hasOwnProperty.call(patch, h)) values[c] = patch[h];
+    if (Object.prototype.hasOwnProperty.call(patch, h)) {
+      values[c] = patch[h];
+      // 只鎖這次真的要寫字串進去的欄位，沒被 patch 到的格子維持原樣
+      if (isTextColumn_(name, h) && typeof patch[h] === 'string') lockCols.push(c);
+    }
     result[h] = normalizeCell_(values[c]);
   }
+
+  // 格式一定要在寫值之前設好，否則 Sheets 在寫入的當下就把字串猜成公式／數字／日期了
+  lockCols.forEach(function (c) { sh.getRange(rowIdx, c + 1).setNumberFormat('@'); });
+
   rowRange.setValues([values]);
   invalidateSheetCache_(name);
   return result;

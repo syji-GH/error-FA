@@ -188,13 +188,24 @@ Sheets 會把長得像 `h:mm` 的字串轉成時間值，而且**分鐘要兩位
 被 `normalizeCell_` 轉成 ISO 字串，`nextCaseId_` 的年度比對失敗、流水號歸零，
 案號就從 `FA-2026-0001` 重發一輪，跑到 10 再壞一次。
 
-修了三個地方：
+修了四個地方：
 
 - `Sheets.gs` 的 `setConfig` 寫入前先把儲存格格式設成純文字（`@`），Sheets 不會再動它
 - `Cases.gs` 的 `nextCaseId_` 不再只信計數器：`lastCaseSeq` 只當「下限提示」，
   真正的依據是 Cases 分頁本身已經用掉哪些號，計數器不管因為什麼理由倒退都不會發出重複的號
 - 三處 `LockService` 的 `finally` 補上 `SpreadsheetApp.flush()`，避免寫入還沒落地就放鎖、
   被下一個請求讀到舊值
+- `Sheets.gs` 的 `appendRow` / `updateRowById` 在寫值**之前**先把文字欄位鎖成純文字，
+  同一類的坑（`=` 開頭變公式、前導零被吃掉、像日期的字串被轉型）一次擋掉
+
+哪些欄位算「文字」列在 `Sheets.gs` 的 `TEXT_COLUMNS_`。只列真的必須是文字的欄位——
+時間戳、`qty`、`size`、計數、布林值不在裡面，它們本來就該讓 Sheets 存成原生型別，
+讀取端的 `normalizeCell_` 會處理。`appendRow` 不再用 `sh.appendRow()`，因為格式一定要在
+寫值之前設好；Sheets 是在寫入的當下就猜型別的，寫完再補格式救不回來。
+
+沒被這次處理到的是**既有列**：手動在試算表上改舊資料仍可能被轉型（欄位格式只在程式寫入
+那一格時才鎖）。`Members` 分頁是唯一常手動編輯的，欄位都是 email / 姓名 / 部門 / 角色，
+不會被誤判，所以先不動。
 
 既有資料要靠 `Repair.gs` 補救。獨立專案沒有試算表選單，直接在 Apps Script 編輯器的函式下拉選單執行：
 
