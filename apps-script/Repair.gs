@@ -283,3 +283,92 @@ function repairRecountAll_() {
 
   return logs;
 }
+
+/*
+ * ══════════════ 全表健檢 ══════════════
+ *
+ * 案號撞號的教訓一般化：只要「用某個欄位當 id 去撈一列」的地方，撞號就會安靜地
+ * 讓後面那筆消失（getRowById 只回第一筆）。這裡把所有 id 欄位都掃一遍，
+ * 順便檢查文字欄位有沒有被 Sheets 轉型、子資料列有沒有指向不存在的案號。
+ */
+
+const INTEGRITY_KEYS_ = [
+  { name: 'Cases',       key: 'caseId',    caseSensitive: true  },
+  { name: 'Comments',    key: 'commentId', caseSensitive: true  },
+  { name: 'Attachments', key: 'attId',     caseSensitive: true  },
+  { name: 'History',     key: 'histId',    caseSensitive: true  },
+  { name: 'Members',     key: 'email',     caseSensitive: false },
+  { name: 'Config',      key: 'key',       caseSensitive: true  }
+];
+
+/** 唯讀健檢，不改任何東西。在編輯器直接執行，看「執行紀錄」。 */
+function diagnoseDataIntegrity() {
+  const lines = [];
+  let problems = 0;
+
+  // ── 1. id 欄位撞號 ──────────────────────────────────────
+  INTEGRITY_KEYS_.forEach(function (spec) {
+    const table = repairReadSheet_(spec.name);
+    const seen = {};
+    const dups = {};
+    table.rows.forEach(function (r) {
+      let v = String(r[spec.key] === undefined || r[spec.key] === null ? '' : r[spec.key]).trim();
+      if (!v) return;
+      if (!spec.caseSensitive) v = v.toLowerCase();
+      if (seen[v]) (dups[v] = dups[v] || [seen[v]]).push(r._row);
+      else seen[v] = r._row;
+    });
+    const keys = Object.keys(dups);
+    if (!keys.length) {
+      lines.push('OK   ' + spec.name + '.' + spec.key + ' 沒有重複（' + table.rows.length + ' 列）');
+      return;
+    }
+    problems += keys.length;
+    lines.push('問題 ' + spec.name + '.' + spec.key + ' 有 ' + keys.length + ' 個值重複：');
+    keys.forEach(function (v) { lines.push('       ' + v + ' → 第 ' + dups[v].join('、') + ' 列'); });
+  });
+
+  // ── 2. 文字欄位被 Sheets 轉型 ────────────────────────────
+  Object.keys(TEXT_COLUMNS_).forEach(function (name) {
+    const table = repairReadSheet_(name);
+    const bad = [];
+    table.rows.forEach(function (r) {
+      TEXT_COLUMNS_[name].forEach(function (h) {
+        if (table.headers.indexOf(h) === -1) return;
+        const v = r[h];
+        if (v === '' || v === null || v === undefined) return;
+        // readAll 已經把 Date 轉成 ISO 字串，所以這裡看到的非字串就是數字或布林值
+        if (typeof v !== 'string') bad.push('第 ' + r._row + ' 列 ' + h + ' = ' + v + '（' + typeof v + '）');
+      });
+    });
+    if (!bad.length) return;
+    problems += bad.length;
+    lines.push('問題 ' + name + ' 有 ' + bad.length + ' 格文字欄位被轉成別的型別：');
+    bad.slice(0, 20).forEach(function (l) { lines.push('       ' + l); });
+    if (bad.length > 20) lines.push('       …還有 ' + (bad.length - 20) + ' 格');
+  });
+
+  // ── 3. 指向不存在案號的子資料列 ──────────────────────────
+  const caseIds = {};
+  repairReadSheet_('Cases').rows.forEach(function (r) { caseIds[String(r.caseId)] = true; });
+  REPAIR_CHILD_SHEETS.forEach(function (s) {
+    const orphans = repairReadSheet_(s.name).rows.filter(function (r) {
+      const id = String(r.caseId || '').trim();
+      return id && !caseIds[id];
+    });
+    if (!orphans.length) {
+      lines.push('OK   ' + s.name + ' 沒有指向不存在案號的列');
+      return;
+    }
+    problems += orphans.length;
+    lines.push('問題 ' + s.name + ' 有 ' + orphans.length + ' 列指向不存在的案號：');
+    orphans.slice(0, 20).forEach(function (r) {
+      lines.push('       第 ' + r._row + ' 列 → ' + r.caseId);
+    });
+  });
+
+  const out = (problems ? '發現 ' + problems + ' 個問題' : '全部正常') + '\n' + lines.join('\n');
+  console.log(out);
+  notice_(problems ? '發現 ' + problems + ' 個問題，詳見執行紀錄' : '健檢通過');
+  return out;
+}

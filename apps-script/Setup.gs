@@ -32,6 +32,7 @@ function setupSheets() {
     if (!sh) sh = ss.insertSheet(name);
     ensureHeaders_(sh, headers);
     formatHeaderRow_(sh, headers.length);
+    lockTextColumnsBelowData_(sh, name, headers);
   });
 
   seedConfigDefaults_();
@@ -65,6 +66,25 @@ function ensureHeaders_(sh, headers) {
       sh.getRange(1, headers.length + 1, 1, existingLastCol - headers.length).clearContent();
     }
   }
+}
+
+/**
+ * 把「必須維持純文字」的欄位（見 Sheets.gs 的 TEXT_COLUMNS_）在**還沒有資料的那些列**
+ * 先鎖成文字格式，這樣手動在試算表上輸入的新資料也不會被 Sheets 猜成公式／數字／日期。
+ *
+ * 刻意只動空白列。既有列可能已經存著被轉型過的值（例如 History 的 fromValue 存過需求日），
+ * 硬改格式只會讓那些格子顯示成序號，看起來更糟；既有資料請用 Repair.gs 的
+ * diagnoseDataIntegrity() 檢查後再逐格處理。
+ */
+function lockTextColumnsBelowData_(sh, name, headers) {
+  const maxRows = sh.getMaxRows();
+  const firstEmpty = Math.max(sh.getLastRow(), 1) + 1;
+  if (firstEmpty > maxRows) return;
+
+  headers.forEach(function (h, c) {
+    if (!isTextColumn_(name, h)) return;
+    sh.getRange(firstEmpty, c + 1, maxRows - firstEmpty + 1, 1).setNumberFormat('@');
+  });
 }
 
 function formatHeaderRow_(sh, colCount) {
@@ -157,6 +177,7 @@ function onOpen() {
     .addItem('設定每日清理排程（Session）', 'ensureDailyPurgeTrigger')
     .addItem('檢查通知收件人', 'whoGetsNewCaseMail')
     .addSeparator()
+    .addItem('資料健檢', 'diagnoseDataIntegrity')
     .addItem('檢查案號是否撞號', 'diagnoseDuplicateCaseIds')
     .addItem('修復撞號的案號', 'repairDuplicateCaseIds')
     .addToUi();

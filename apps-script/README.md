@@ -222,7 +222,38 @@ Sheets 會把長得像 `h:mm` 的字串轉成時間值，而且**分鐘要兩位
 會一併重算，`lastCaseSeq` 也會往前推到目前用掉的最大號。Drive 上的附件資料夾仍叫舊案號，
 附件是靠 `driveFileId` 開的，不影響顯示。
 
-## 9. 初始化資料
+## 9. 資料健檢
+
+`diagnoseDataIntegrity()`（唯讀，在 Apps Script 編輯器執行）把案號撞號的教訓一般化，
+一次掃三件事：
+
+| 檢查 | 為什麼 |
+|---|---|
+| 所有 id 欄位有沒有撞號 | `Cases.caseId`、`Comments.commentId`、`Attachments.attId`、`History.histId`、`Members.email`（不分大小寫）、`Config.key`。凡是拿某個欄位當 id 去撈一列的地方，撞號都會讓後面那筆安靜消失 |
+| 文字欄位有沒有被 Sheets 轉型 | 列出 `TEXT_COLUMNS_` 裡實際存成數字或布林值的格子，就是被自動轉型吃掉的那些 |
+| 子資料列有沒有指向不存在的案號 | 留言／附件／歷程掛在已經不存在的 `caseId` 上，畫面上永遠看不到 |
+
+`Members.email` 重複時執行期不會壞掉：`Auth.gs` 的 `findMemberRow_` 會記一筆
+`console.error`，並且優先採用還在啟用中的那一列——不然名單上面剛好留了一列停用的舊資料，
+這個人就會被整個擋在門外而且看不出原因。但這只是止血，重複的列還是要在試算表上清掉。
+
+## 10. 寫入的併發保護
+
+`Code.gs` 的 `withWriteLock_` 包住所有「讀出來改一改再寫回去」的區塊：
+
+- **一定要鎖**：`updateRowById` 是整列讀出、整列寫回，兩個請求同時動同一列的話，
+  後寫的會把先寫的欄位整個蓋掉；`commentCount` 這種計數欄還必須在鎖裡重讀再加減，
+  不能拿進鎖之前那份資料算
+- **一定要 flush**：Apps Script 的試算表寫入是批次的，不 `SpreadsheetApp.flush()` 就放鎖，
+  下一個請求進鎖後讀到的還是舊值——案號撞號就有這個成分在
+
+`Comments.gs` 三個寫入路徑原本完全沒上鎖，已補上。`comments.create` 的附件上傳刻意留在鎖
+外面：Drive 往返可能好幾秒，不該佔著全域鎖擋住其他人。
+
+`Cases.gs` 的三個寫入路徑比這個 helper 早寫，目前仍是同樣邏輯自己展開在函式裡（行為一致，
+只是沒共用）。新的寫入路徑一律用 `withWriteLock_`，不要再手寫一次。
+
+## 11. 初始化資料
 
 1. 部署完成、Script Properties 填好之後，開對應的 Google Sheets（`SPREADSHEET_ID` 那本）
 2. 重新整理頁面，會看到選單「error-FA」→「初始化工作表」，點下去會建立六個分頁
@@ -238,7 +269,7 @@ Sheets 會把長得像 `h:mm` 的字串轉成時間值，而且**分鐘要兩位
 
 ---
 
-## 10. 編輯案件與變更歷程
+## 12. 編輯案件與變更歷程
 
 ### 誰可以編輯：兩層權限
 

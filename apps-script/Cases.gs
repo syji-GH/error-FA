@@ -310,13 +310,9 @@ const CASE_HANDLING_FIELDS = ['assignee', 'resolution'];
 
 const CASE_EDITABLE_FIELDS = CASE_CONTENT_FIELDS.concat(CASE_HANDLING_FIELDS);
 
+/** 見 Auth.gs 的 findMemberRow_：重複 email 的處理集中在那裡，不要各自 find 一次。 */
 function findMemberByEmail_(email) {
-  const target = String(email).toLowerCase();
-  const members = readAll('Members');
-  for (let i = 0; i < members.length; i++) {
-    if (String(members[i].email || '').toLowerCase() === target) return members[i];
-  }
-  return null;
+  return findMemberRow_(email);
 }
 
 /**

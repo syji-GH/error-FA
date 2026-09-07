@@ -67,6 +67,32 @@ function makeHistory_(caseId, user, action, opts) {
   };
 }
 
+/**
+ * 包住「讀出來改一改再寫回去」的區塊。所有會動到既有列的寫入都應該走這裡。
+ *
+ * 為什麼一定要鎖：updateRowById 是整列讀出、整列寫回，兩個請求同時動同一列的話，
+ * 後寫的會把先寫的欄位整個蓋掉；計數欄還會少算（要在鎖裡重讀再加減，不能拿進鎖之前
+ * 那份資料算）。
+ *
+ * 為什麼一定要 flush：Apps Script 的試算表寫入是批次的，不 flush 就放鎖的話，
+ * 下一個請求進鎖後讀到的還是舊值——案號撞號就有這個成分在。
+ *
+ * 注意 Cases.gs 的三個寫入路徑比這個 helper 早寫，目前仍是同樣邏輯自己展開在函式裡，
+ * 行為一致但沒共用；新的寫入路徑一律用這個，不要再手寫一次。
+ */
+function withWriteLock_(fn, timeoutMs) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(timeoutMs || 10000)) {
+    throw new AppError('CONFLICT', '系統忙碌中，請稍後再試');
+  }
+  try {
+    return fn();
+  } finally {
+    SpreadsheetApp.flush();
+    lock.releaseLock();
+  }
+}
+
 /** 統一的業務錯誤：code 對應 UNAUTHENTICATED/FORBIDDEN/NOT_FOUND/BAD_REQUEST/CONFLICT/INTERNAL */
 class AppError extends Error {
   constructor(code, message) {

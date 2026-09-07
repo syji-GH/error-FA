@@ -128,17 +128,40 @@ function resolveUser(profile) {
   return resolved;
 }
 
+function isMemberInactive_(m) {
+  return !!m && (m.active === false || String(m.active).toUpperCase() === 'FALSE');
+}
+
+/**
+ * 依 email 找 Members 的那一列。Members 名單是人工維護的，同一個 email 被貼成兩列
+ * 並非不可能，而「安靜地只取第一筆」正是讓案號撞號變成整張單消失的那種失敗模式，
+ * 所以這裡撞到重複要記 log，並且優先採用還在啟用中的那一列——不然名單上面剛好留了
+ * 一列停用的舊資料，這個人就會被整個擋在門外，而且完全看不出原因。
+ */
+function findMemberRow_(email) {
+  const target = String(email || '').toLowerCase();
+  if (!target) return null;
+
+  const matches = readAll('Members').filter(function (m) {
+    return String(m.email || '').toLowerCase() === target;
+  });
+  if (matches.length <= 1) return matches[0] || null;
+
+  console.error('Members 有重複的 email：' + target + '（共 ' + matches.length + ' 列），' +
+                '請在試算表清乾淨；本次採用第一列還在啟用中的資料');
+  const active = matches.filter(function (m) { return !isMemberInactive_(m); });
+  return active.length ? active[0] : matches[0];
+}
+
 function resolveUserUncached_(profile) {
-  const members = readAll('Members');
   const email = String(profile.email).toLowerCase();
-  const match = members.find(function (m) { return String(m.email || '').toLowerCase() === email; });
+  const match = findMemberRow_(profile.email);
 
   if (!match) {
     return { email: profile.email, name: profile.name || profile.email, dept: '', role: 'staff' };
   }
 
-  const isActiveFalse = match.active === false || String(match.active).toUpperCase() === 'FALSE';
-  if (isActiveFalse) {
+  if (isMemberInactive_(match)) {
     CacheService.getScriptCache().put('role_' + email, JSON.stringify({ inactive: true }),
                                       ROLE_CACHE_TTL_SEC);
     throw new AppError('FORBIDDEN', '這個帳號已被停用，請聯絡系統管理員');
@@ -155,8 +178,7 @@ function resolveUserUncached_(profile) {
 /** session.login 專用：Members 名單找不到這個人，就自動新增一列（role staff / active TRUE）。 */
 function resolveOrProvisionUser_(profile) {
   const email = String(profile.email).toLowerCase();
-  const members = readAll('Members');
-  const match = members.find(function (m) { return String(m.email || '').toLowerCase() === email; });
+  const match = findMemberRow_(profile.email);
 
   if (!match) {
     appendRow('Members', {

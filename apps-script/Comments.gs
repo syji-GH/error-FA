@@ -41,15 +41,23 @@ function commentsCreate(user, payload) {
   };
   appendRow('Comments', commentRow);
 
+  // 附件先傳完再進鎖：Drive 往返可能好幾秒，不該佔著全域鎖擋住其他人
   let savedCount = 0;
   if (hasAttachments) {
     savedCount = saveAttachments(caseId, commentId, payload.attachments, user).length;
   }
 
-  updateRowById('Cases', 'caseId', caseId, {
-    commentCount: Number(caseRow.commentCount || 0) + 1,
-    attachmentCount: Number(caseRow.attachmentCount || 0) + savedCount,
-    lastActivityAt: now
+  withWriteLock_(function () {
+    // 計數一定要在鎖裡重讀再加，不能拿進鎖之前那份 caseRow 算——兩個人同時留言的話
+    // 後進來的會用到過期的計數，一則留言就這樣消失在數字裡。
+    // 而且 updateRowById 是整列讀出來再整列寫回去，沒有鎖的話連別人剛改的狀態都會被蓋掉。
+    invalidateSheetCache_('Cases');
+    const fresh = getRowById('Cases', 'caseId', caseId) || caseRow;
+    updateRowById('Cases', 'caseId', caseId, {
+      commentCount: Number(fresh.commentCount || 0) + 1,
+      attachmentCount: Number(fresh.attachmentCount || 0) + savedCount,
+      lastActivityAt: now
+    });
   });
 
   try {
@@ -82,13 +90,15 @@ function commentsUpdate(user, payload) {
   }
 
   const now = nowIso_();
-  const updated = updateRowById('Comments', 'commentId', commentId, {
-    body: body,
-    isEdited: true,
-    editedAt: now
+  const updated = withWriteLock_(function () {
+    const u = updateRowById('Comments', 'commentId', commentId, {
+      body: body,
+      isEdited: true,
+      editedAt: now
+    });
+    updateRowById('Cases', 'caseId', commentRow.caseId, { lastActivityAt: now });
+    return u;
   });
-
-  updateRowById('Cases', 'caseId', commentRow.caseId, { lastActivityAt: now });
 
   return { comment: updated };
 }
@@ -109,15 +119,18 @@ function commentsDelete(user, payload) {
   }
 
   const now = nowIso_();
-  updateRowById('Comments', 'commentId', commentId, { isDeleted: true, editedAt: now });
+  withWriteLock_(function () {
+    updateRowById('Comments', 'commentId', commentId, { isDeleted: true, editedAt: now });
 
-  const caseRow = getRowById('Cases', 'caseId', commentRow.caseId);
-  if (caseRow) {
+    // 跟 commentsCreate 同理：計數要在鎖裡重讀再減
+    invalidateSheetCache_('Cases');
+    const caseRow = getRowById('Cases', 'caseId', commentRow.caseId);
+    if (!caseRow) return;
     updateRowById('Cases', 'caseId', commentRow.caseId, {
       commentCount: Math.max(0, Number(caseRow.commentCount || 0) - 1),
       lastActivityAt: now
     });
-  }
+  });
 
   return { ok: true };
 }
