@@ -156,5 +156,8 @@ function onOpen() {
     .addItem('初始化工作表', 'setupSheets')
     .addItem('設定每日清理排程（Session）', 'ensureDailyPurgeTrigger')
     .addItem('檢查通知收件人', 'whoGetsNewCaseMail')
+    .addSeparator()
+    .addItem('檢查案號是否撞號', 'diagnoseDuplicateCaseIds')
+    .addItem('修復撞號的案號', 'repairDuplicateCaseIds')
     .addToUi();
 }

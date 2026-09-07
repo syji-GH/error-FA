@@ -140,27 +140,83 @@ function casesGet(user, payload) {
   };
 }
 
-/** 取下一個案號：FA-<年度>-<4碼流水號>，年度變了流水號自動歸零。用 LockService 避免撞號。 */
+/** 目前 Cases 分頁上所有被用掉的案號，key 為案號本身。 */
+function usedCaseIds_() {
+  const used = {};
+  readAll('Cases').forEach(function (r) {
+    const id = String(r.caseId || '').trim();
+    if (id) used[id] = true;
+  });
+  return used;
+}
+
+function formatCaseId_(year, seq) {
+  // 超過 9999 就不補零，硬切 4 碼會把號碼截短、反而變成撞號的來源
+  return 'FA-' + year + '-' + (seq > 9999 ? String(seq) : ('0000' + seq).slice(-4));
+}
+
+/** 掃一組已使用的案號，回傳指定年度用掉的最大流水號。 */
+function maxCaseSeqOfYear_(year, usedIds) {
+  const prefix = 'FA-' + year + '-';
+  let max = 0;
+  Object.keys(usedIds).forEach(function (id) {
+    if (id.indexOf(prefix) !== 0) return;
+    const n = Number(id.slice(prefix.length));
+    if (n > max) max = n;
+  });
+  return max;
+}
+
+/**
+ * 從 minSeq 與「年度內已用掉的最大號」兩者取大，往後找第一個還沒被用掉的案號。
+ * 會就地把配出去的號標記進 usedIds，所以連續配號（修號工具）不會自己撞自己。
+ */
+function allocateCaseId_(year, usedIds, minSeq) {
+  let seq = Math.max(Number(minSeq) || 0, maxCaseSeqOfYear_(year, usedIds));
+  let id;
+  do {
+    seq += 1;
+    id = formatCaseId_(year, seq);
+  } while (usedIds[id]);
+  usedIds[id] = true;
+  return { caseId: id, seq: seq };
+}
+
+/**
+ * 取下一個案號：FA-<年度>-<4碼流水號>，年度變了流水號自動歸零。用 LockService 避免撞號。
+ *
+ * Config 的 lastCaseSeq 只當「下限提示」，真正的依據是 Cases 分頁本身已經用掉哪些號。
+ * 這樣寫是因為真的撞號過（FA-2026-0003、FA-2026-0004 各有兩張單）：計數器只要因為任何
+ * 理由倒退——有人手動改過 Config、試算表被還原、寫入沒 flush 就被下一個請求讀到——
+ * 只信計數器就會發出已經存在的號，而 getRowById 只回第一筆，後開的那張單就再也點不開。
+ */
 function nextCaseId_() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
     throw new AppError('CONFLICT', '系統忙碌中，請稍後再試（取得案號逾時）');
   }
   try {
+    // 鎖到手才讀，而且要繞過本次執行的讀取快取，否則可能拿到進鎖之前的舊值
+    invalidateSheetCache_('Cases');
+    invalidateSheetCache_('Config');
+
     const year = new Date().getFullYear();
+
+    let hintSeq = 0;
     const raw = String(getConfig('lastCaseSeq') || '');
-    let storedYear = year;
-    let seq = 0;
     if (raw.indexOf(':') !== -1) {
       const parts = raw.split(':');
-      storedYear = Number(parts[0]);
-      seq = Number(parts[1]) || 0;
+      // 年度對不上就不採用，流水號自然從 0 重新起算
+      if (Number(parts[0]) === year) hintSeq = Number(parts[1]) || 0;
     }
-    if (storedYear !== year) seq = 0;
-    seq += 1;
-    setConfig('lastCaseSeq', year + ':' + seq);
-    const padded = ('0000' + seq).slice(-4);
-    return 'FA-' + year + '-' + padded;
+
+    const allocated = allocateCaseId_(year, usedCaseIds_(), hintSeq);
+    setConfig('lastCaseSeq', year + ':' + allocated.seq);
+
+    // 一定要在放開鎖之前把待寫入真的送進試算表。Apps Script 的試算表寫入是批次的，
+    // 不 flush 就放鎖的話，下一個請求進鎖後讀到的還是舊的計數器。
+    SpreadsheetApp.flush();
+    return allocated.caseId;
   } finally {
     lock.releaseLock();
   }
@@ -443,6 +499,8 @@ function casesUpdate(user, payload) {
       removedAttachmentIds: removed.map(function (r) { return r.attId; })
     };
   } finally {
+    // 放鎖之前先把待寫入送進試算表，否則下一個請求可能讀到還沒落地的舊資料
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 }
@@ -502,6 +560,8 @@ function casesSetStatus(user, payload) {
 
     return { case: updated, historyEntry: toHistoryDTO_(historyRow) };
   } finally {
+    // 放鎖之前先把待寫入送進試算表，否則下一個請求可能讀到還沒落地的舊資料
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 }

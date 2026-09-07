@@ -166,13 +166,31 @@ function getConfig(key) {
   return '';
 }
 
+/**
+ * 寫 Config。value 一律先把儲存格格式設成純文字（@）再寫入——這裡踩過一次大坑：
+ *
+ * lastCaseSeq 存的是 "2026:10" 這種字串，而 Sheets 會把長得像 h:mm 的字串吃成時間值。
+ * 分鐘要兩位數才會觸發，所以 "2026:1" 到 "2026:9" 都好好的是文字，一寫到 "2026:10"
+ * 就被轉成時距；讀回來是 Date、再被 normalizeCell_ 轉成 ISO 字串，年度就對不上、
+ * 流水號歸零重發，FA-2026-0001 到 0005 因此各被發了兩次（見 Repair.gs）。
+ *
+ * 先設格式再寫值，Sheets 就不會再動它。Config 的值本來也全都是字串。
+ */
 function setConfig(key, value) {
   const sh = sheet('Config');
   const headers = headersOf_(sh);
-  const rowIdx = findRowIndexById_(sh, headers, 'key', key);
+  const valueCol = headers.indexOf('value');
+  if (valueCol === -1) throw new AppError('INTERNAL', 'Config 分頁缺少 value 欄位');
+
+  let rowIdx = findRowIndexById_(sh, headers, 'key', key);
   if (rowIdx === -1) {
-    appendRow('Config', { key: key, value: value });
-  } else {
-    updateRowById('Config', 'key', key, { value: value });
+    appendRow('Config', { key: key, value: '' });
+    rowIdx = findRowIndexById_(sh, headers, 'key', key);
+    if (rowIdx === -1) throw new AppError('INTERNAL', 'Config 寫入後找不到 key：' + key);
   }
+
+  const cell = sh.getRange(rowIdx, valueCol + 1);
+  cell.setNumberFormat('@');
+  cell.setValue(value === undefined || value === null ? '' : value);
+  invalidateSheetCache_('Config');
 }
