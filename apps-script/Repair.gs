@@ -341,7 +341,12 @@ function diagnoseDataIntegrity() {
         if (typeof v !== 'string') bad.push('第 ' + r._row + ' 列 ' + h + ' = ' + v + '（' + typeof v + '）');
       });
     });
-    if (!bad.length) return;
+    // 沒問題也要印一行。「什麼都沒印」跟「檢查過了沒事」長得一樣，
+    // 而分不出這兩者正是這個檔案存在的原因。
+    if (!bad.length) {
+      lines.push('OK   ' + name + ' 的文字欄位沒有被轉型（' + table.rows.length + ' 列）');
+      return;
+    }
     problems += bad.length;
     lines.push('問題 ' + name + ' 有 ' + bad.length + ' 格文字欄位被轉成別的型別：');
     bad.slice(0, 20).forEach(function (l) { lines.push('       ' + l); });
