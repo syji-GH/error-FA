@@ -206,6 +206,42 @@
     };
   }
 
+  /* ══════════════ 類型 chip（開單與編輯共用） ══════════════ */
+
+  /**
+   * 在 root 裡畫一排單選的類型 chip。
+   * onChange 每次選取都會被呼叫（包含一開始帶 initial 進來的那一次），
+   * 因為「其他」類型要跟著把料號的必填星號拿掉。
+   */
+  function mountTypeChips(root, initial, onChange) {
+    var chosen = initial || '';
+
+    function paint() {
+      root.innerHTML = window.CASE_TYPES.map(function (t) {
+        var on = t === chosen;
+        return '<button type="button" data-t="' + esc(t) + '" class="js-type rounded-full px-4 py-2 ' +
+          'text-[13px] font-bold border transition-colors ' +
+          (on ? 'bg-ecoco-blue text-white border-ecoco-blue'
+              : 'border-line text-muted hover:text-ink hover:bg-card') + '">' + esc(t) + '</button>';
+      }).join('');
+    }
+    paint();
+
+    root.addEventListener('click', function (e) {
+      var b = e.target.closest('.js-type');
+      if (!b) return;
+      chosen = b.dataset.t;
+      paint();
+      if (onChange) onChange(chosen);
+    });
+
+    if (chosen && onChange) onChange(chosen);
+    return {
+      get: function () { return chosen; },
+      set: function (t) { chosen = t || ''; paint(); if (onChange) onChange(chosen); },
+    };
+  }
+
   /* ══════════════ 列表頁 ══════════════ */
 
   function listQuery() {
@@ -392,6 +428,10 @@
             '<div class="flex items-center gap-2 flex-wrap">' +
               UI.statusBadge(c.status) + UI.typeBadge(c.type) +
               '<span class="ml-auto text-[10px] font-bold tracking-widest text-muted">' + esc(c.caseId) + '</span>' +
+              (perm.canEditContent || perm.canEditCase
+                ? '<button id="btnEditCase" class="text-xs font-bold text-muted hover:text-ink ' +
+                  'px-2.5 py-1 rounded-full hover:bg-card transition-colors">編輯</button>'
+                : '') +
             '</div>' +
             '<h1 class="mt-3 text-xl font-black tracking-tight text-ink">' + esc(caseLabel(c)) + '</h1>' +
             '<div class="mt-3 flex items-center gap-2 text-xs font-medium text-muted">' +
@@ -419,12 +459,24 @@
         // ── 右側資訊欄
         '<div class="space-y-4 lg:sticky lg:top-24">' +
           metaPanel(c) +
-          historyPanel(data.history || []) +
+          historyPanel(data.history || [], indexAttachments(data)) +
         '</div>' +
       '</div>';
 
     mountComposer(c.caseId);
     bindStatusPanel(c, perm);
+
+    var editBtn = document.getElementById('btnEditCase');
+    if (editBtn) editBtn.addEventListener('click', function () { openEditCase(data); });
+  }
+
+  /** attachmentId → 附件 DTO。含已移除的，歷程紀錄要靠它把「當時那張圖」畫出來。 */
+  function indexAttachments(data) {
+    var map = {};
+    (data.attachments || []).concat(data.removedAttachments || []).forEach(function (a) {
+      map[a.attachmentId] = a;
+    });
+    return map;
   }
 
   function statusPanel(c, perm) {
@@ -496,7 +548,7 @@
       UI.field('料號', c.partNo), UI.field('品名', c.partName),
       UI.field('廠商', c.vendor), UI.field('採購單號', c.poNo),
       UI.field('數量', c.qty ? (c.qty + ' ' + (c.unit || '')) : ''),
-      UI.field('需求日', c.needByDate),
+      UI.field('需求日', toDateInput(c.needByDate)),
       UI.field('承辦人', c.assigneeName || c.assignee),
       UI.field('結案說明', c.resolution),
       UI.field('結案時間', c.closedAt ? UI.fmtDate(c.closedAt) : ''),
@@ -507,18 +559,143 @@
       rows + '</div>';
   }
 
-  function historyPanel(history) {
+  /* ══════════════ 處理歷程 ══════════════ */
+
+  // History.action 存的是欄位代碼（跟 Cases 分頁的欄名一致），這裡翻成人看的字
+  var HIST_LABEL = {
+    create: '開單',
+    status: '狀態',
+    type: '類型',
+    title: '標題',
+    partNo: '料號',
+    partName: '品名',
+    vendor: '廠商',
+    poNo: '採購單號',
+    qty: '數量',
+    unit: '單位',
+    needByDate: '需求日',
+    description: '狀況說明',
+    assignee: '承辦人',
+    resolution: '處理結果',
+    'attachment.add': '新增附件',
+    'attachment.remove': '移除附件',
+  };
+
+  var HIST_INLINE_MAX = 40;   // 超過這個長度的舊值改用可展開的方式顯示
+
+  /**
+   * History 存的是原始值，不是給人看的值。兩個要翻譯的：
+   *  - assignee 存 email，畫面上一直都是顯示姓名
+   *  - needByDate 可能被 Sheets 存成日期值，讀回來是一串 ISO
+   */
+  function histDisplayValue(action, v) {
+    var s = String(v == null ? '' : v).trim();
+    if (!s) return '';
+    if (action === 'assignee') {
+      var hit = state.members.filter(function (m) { return m.email === s; })[0];
+      return hit ? (hit.name || hit.email) : s;
+    }
+    if (action === 'needByDate') return toDateInput(s) || s;
+    return s;
+  }
+
+  /** 與右側窄欄相容的「舊 → 新」；內容太長就收進 details，不把側邊欄撐爆。 */
+  function histValueBlock(label, from, to) {
+    var f = String(from == null ? '' : from);
+    var t = String(to == null ? '' : to);
+    var longish = f.length > HIST_INLINE_MAX || t.length > HIST_INLINE_MAX;
+
+    if (!longish) {
+      return '<p class="text-sm font-bold text-ink">' + esc(label) + '：' +
+        (f ? '<span class="font-medium text-muted line-through">' + esc(f) + '</span> → ' : '') +
+        '<span>' + esc(t || '（清空）') + '</span></p>';
+    }
+    return '<p class="text-sm font-bold text-ink">' + esc(label) + ' 已修改</p>' +
+      '<details class="mt-1 group">' +
+        '<summary class="text-xs font-bold text-ecoco-blue cursor-pointer select-none list-none">' +
+          '看修改前後</summary>' +
+        (f ? '<div class="mt-2"><p class="text-[10px] font-bold tracking-widest uppercase text-muted">修改前</p>' +
+             '<div class="mt-1 text-xs font-medium text-muted prose-plain bg-card rounded-lg p-2">' +
+             esc(f) + '</div></div>' : '') +
+        '<div class="mt-2"><p class="text-[10px] font-bold tracking-widest uppercase text-muted">修改後</p>' +
+        '<div class="mt-1 text-xs font-medium text-ink2 prose-plain bg-card rounded-lg p-2">' +
+        esc(t || '（清空）') + '</div></div>' +
+      '</details>';
+  }
+
+  /** 附件類的歷程：要看得到那張圖本人，不然「換過圖」等於沒留到。 */
+  function histAttachmentBlock(h, attMap) {
+    var att = attMap[h.refId];
+    var name = att ? att.fileName : (h.toValue || h.fromValue);
+    var removed = h.action === 'attachment.remove';
+
+    var head = '<p class="text-sm font-bold text-ink">' + esc(HIST_LABEL[h.action]) + '：' +
+      '<span class="' + (removed ? 'font-medium text-muted line-through' : '') + '">' +
+      esc(name || '（未知檔案）') + '</span></p>';
+
+    if (!att) return head;
+    if (/^image\//.test(att.mimeType)) {
+      return head +
+        '<a href="' + esc(att.viewUrl) + '" target="_blank" rel="noopener" ' +
+          'class="mt-2 block w-20 h-20 rounded-lg overflow-hidden border border-line bg-card ' +
+          (removed ? 'opacity-70 hover:opacity-100 ' : '') + 'transition-opacity">' +
+          thumbImg(att) + '</a>';
+    }
+    return head +
+      '<a href="' + esc(att.viewUrl) + '" target="_blank" rel="noopener" ' +
+        'class="mt-1 inline-block text-xs font-bold text-ecoco-blue">開啟檔案</a>';
+  }
+
+  function histEntryBlock(h, attMap) {
+    if (h.action === 'create') {
+      return '<p class="text-sm font-bold text-ink">開單</p>';
+    }
+    if (h.action === 'attachment.add' || h.action === 'attachment.remove') {
+      return histAttachmentBlock(h, attMap);
+    }
+    return histValueBlock(HIST_LABEL[h.action] || h.action,
+      histDisplayValue(h.action, h.fromValue), histDisplayValue(h.action, h.toValue));
+  }
+
+  /**
+   * 一次編輯改五個欄位就會產生五列 History，分開畫會把時間軸淹掉。
+   * 後端在同一次 cases.update 裡共用同一個時間戳，這裡就按「時間＋人」併成一組。
+   */
+  function groupHistory(history) {
+    var groups = [];
+    history.forEach(function (h) {
+      var last = groups[groups.length - 1];
+      if (last && last.at === h.at && last.actorEmail === h.actorEmail) {
+        last.entries.push(h);
+        if (!last.note && h.note) last.note = h.note;
+        return;
+      }
+      groups.push({
+        at: h.at, actorEmail: h.actorEmail, actorName: h.actorName,
+        note: h.note || '', entries: [h],
+      });
+    });
+    return groups;
+  }
+
+  function historyPanel(history, attMap) {
+    history = history || [];
+    attMap = attMap || {};
     if (!history.length) return '';
+
+    var groups = groupHistory(history);   // 舊到新，與下方留言串的方向一致
+
     return '<div class="bg-white rounded-2xl border border-line shadow-sm p-5">' +
       '<p class="text-[10px] font-bold tracking-widest uppercase text-muted mb-4">處理紀錄</p>' +
-      '<div class="space-y-4">' + history.map(function (h) {
+      '<div class="space-y-4">' + groups.map(function (g) {
         return '<div class="relative pl-5 border-l-2 border-[#F0F3F7]">' +
           '<span class="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-ecoco-orange"></span>' +
-          '<p class="text-sm font-bold text-ink">' +
-            esc(h.fromValue ? h.fromValue + ' → ' + h.toValue : h.action) + '</p>' +
-          '<p class="text-xs font-medium text-muted mt-0.5">' +
-            esc(h.actorName || h.actorEmail) + ' · ' + esc(UI.fmtDate(h.at)) + '</p>' +
-          (h.note ? '<p class="mt-1 text-xs font-medium text-ink2 prose-plain">' + esc(h.note) + '</p>' : '') +
+          '<div class="space-y-2">' +
+            g.entries.map(function (h) { return histEntryBlock(h, attMap); }).join('') +
+          '</div>' +
+          '<p class="text-xs font-medium text-muted mt-1">' +
+            esc(g.actorName || g.actorEmail) + ' · ' + esc(UI.fmtDate(g.at)) + '</p>' +
+          (g.note ? '<p class="mt-1 text-xs font-medium text-ink2 prose-plain">' + esc(g.note) + '</p>' : '') +
         '</div>';
       }).join('') + '</div></div>';
   }
@@ -646,13 +823,7 @@
 
   function openNewCase() {
     var up = makeUploader();
-    var chosenType = '';
-
-    var typeChips = window.CASE_TYPES.map(function (t) {
-      return '<button type="button" data-t="' + esc(t) + '" class="js-type rounded-full px-4 py-2 ' +
-        'text-[13px] font-bold border border-line text-muted hover:text-ink hover:bg-card transition-colors">' +
-        esc(t) + '</button>';
-    }).join('');
+    var typeSel = null;   // mountTypeChips 要等 modal body 建好才能掛上去
 
     var lbl = 'block text-[10px] font-bold tracking-widest uppercase text-muted mb-1.5';
 
@@ -662,7 +833,7 @@
         '<div class="space-y-5">' +
           '<div>' +
             '<label class="' + lbl + '">異常類型 <span class="text-ecoco-orange">*</span></label>' +
-            '<div id="typeRow" class="flex flex-wrap gap-2">' + typeChips + '</div>' +
+            '<div id="typeRow" class="flex flex-wrap gap-2"></div>' +
           '</div>' +
           '<div>' +
             '<label id="lblPartNo" class="' + lbl + '">料號 <span class="text-ecoco-orange">*</span></label>' +
@@ -701,28 +872,16 @@
 
     // 「其他」類型不強制填料號，標記與 placeholder 要跟著切換，
     // 否則使用者看到星號卻送得出去（或反過來）會很困惑
-    function partNoOptional() { return chosenType === '其他'; }
-    function syncPartNoLabel() {
+    function partNoOptional() { return typeSel.get() === '其他'; }
+
+    // 類型 chip 單選（跟編輯 Modal 共用同一個元件）
+    typeSel = mountTypeChips(m.body.querySelector('#typeRow'), '', function () {
       var el = $('lblPartNo');
       if (!el) return;
       el.innerHTML = partNoOptional()
         ? '料號 <span class="text-muted">（選填）</span>'
         : '料號 <span class="text-ecoco-orange">*</span>';
       $('fPartNo').placeholder = partNoOptional() ? '此類型可不填' : '例：A-1023';
-    }
-
-    // 類型 chip 單選
-    m.body.querySelector('#typeRow').addEventListener('click', function (e) {
-      var b = e.target.closest('.js-type');
-      if (!b) return;
-      chosenType = b.dataset.t;
-      syncPartNoLabel();
-      m.body.querySelectorAll('.js-type').forEach(function (x) {
-        var on = x === b;
-        x.className = 'js-type rounded-full px-4 py-2 text-[13px] font-bold border transition-colors ' +
-          (on ? 'bg-ecoco-blue text-white border-ecoco-blue'
-              : 'border-line text-muted hover:text-ink hover:bg-card');
-      });
     });
 
     // 草稿（只存文字，不存附件）
@@ -730,7 +889,7 @@
     function saveDraft() {
       try {
         localStorage.setItem(DRAFT, JSON.stringify({
-          type: chosenType, title: $('fTitle').value, partNo: $('fPartNo').value,
+          type: typeSel.get(), title: $('fTitle').value, partNo: $('fPartNo').value,
           partName: $('fPartName').value, vendor: $('fVendor').value, poNo: $('fPoNo').value,
           qty: $('fQty').value, unit: $('fUnit').value, desc: $('fDesc').value,
         }));
@@ -743,16 +902,13 @@
         $('fPartName').value = d.partName || ''; $('fVendor').value = d.vendor || '';
         $('fPoNo').value = d.poNo || ''; $('fQty').value = d.qty || '';
         $('fUnit').value = d.unit || ''; $('fDesc').value = d.desc || '';
-        if (d.type) {
-          var chip = m.body.querySelector('.js-type[data-t="' + d.type + '"]');
-          if (chip) chip.click();
-        }
+        if (d.type && window.CASE_TYPES.indexOf(d.type) !== -1) typeSel.set(d.type);
       }
     } catch (e) {}
 
     m.footer.querySelector('#ncCancel').addEventListener('click', m.close);
     m.footer.querySelector('#ncOk').addEventListener('click', async function () {
-      if (!chosenType) { UI.toast('請選擇異常類型', 'error'); return; }
+      if (!typeSel.get()) { UI.toast('請選擇異常類型', 'error'); return; }
       if (!partNoOptional() && !$('fPartNo').value.trim()) {
         UI.toast('請填寫料號', 'error'); return;
       }
@@ -762,7 +918,7 @@
       btn.disabled = true; btn.textContent = '送出中…';
       try {
         var res = await API.createCase({
-          type: chosenType,
+          type: typeSel.get(),
           title: $('fTitle').value.trim(),
           partNo: $('fPartNo').value.trim(),
           partName: $('fPartName').value.trim(),
@@ -779,6 +935,242 @@
         location.hash = '#/case/' + res.case.caseId;
       } catch (err) {
         btn.disabled = false; btn.textContent = '送出異常單';
+        UI.toast(err.message, 'error');
+      }
+    });
+  }
+
+  /* ══════════════ 編輯 Modal ══════════════ */
+
+  /** Sheets 可能把日期欄存成日期值，讀回來是 ISO 字串；<input type=date> 只吃 yyyy-MM-dd。 */
+  function toDateInput(v) {
+    var s = String(v == null ? '' : v).trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    var d = new Date(s);
+    if (isNaN(d)) return '';
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  /**
+   * 編輯一張異常單。
+   *
+   * 畫面依後端給的兩層權限決定要長出哪幾段（規則見 apps-script/Auth.gs）：
+   *   canEditContent  類型、料號、描述、附件 —— 個人改個人的單（開單人與 admin）
+   *   canEditCase     承辦人、處理結果 —— 廠務部要能接手處理，所以寬一級
+   * 兩個都沒有的人根本看不到「編輯」按鈕；這裡再擋一次是因為權限判斷一律以後端為準。
+   *
+   * 欄位、要加的附件、要移除的附件合成一個 cases.update 送出去，
+   * 因為每趟 /exec 固定要 ~1.15 秒，拆開送「換一張圖」就要等三倍。
+   *
+   * 移除附件是軟刪除：舊圖還在，只是不再出現在主畫面，
+   * 要回頭看就到右側「處理紀錄」點那張縮圖。
+   */
+  function openEditCase(data) {
+    var c = data.case;
+    var perm = data.permissions || {};
+    var canContent = !!perm.canEditContent;
+    var canHandle = !!perm.canEditCase;
+    if (!canContent && !canHandle) return;
+
+    var current = (data.attachments || []).filter(function (a) { return !a.commentId; });
+    var removeIds = {};
+    var up = canContent ? makeUploader() : null;
+    var typeSel = null;
+
+    var lbl = 'block text-[10px] font-bold tracking-widest uppercase text-muted mb-1.5';
+
+    var memberOpts = ['<option value="">（未指派）</option>'].concat(
+      state.members.map(function (m) {
+        return '<option value="' + esc(m.email) + '"' +
+          (m.email === c.assignee ? ' selected' : '') + '>' +
+          esc(m.name || m.email) + '</option>';
+      })
+    ).join('');
+
+    var contentBlock = !canContent ? '' :
+      '<div>' +
+        '<label class="' + lbl + '">異常類型 <span class="text-ecoco-orange">*</span></label>' +
+        '<div id="edTypeRow" class="flex flex-wrap gap-2"></div>' +
+      '</div>' +
+      '<div>' +
+        '<label id="edLblPartNo" class="' + lbl + '">料號</label>' +
+        '<input id="ePartNo" class="' + UI.input + '" value="' + esc(c.partNo || '') + '">' +
+      '</div>' +
+      '<div>' +
+        '<label class="' + lbl + '">標題</label>' +
+        '<input id="eTitle" class="' + UI.input + '" placeholder="選填，不填就用料號顯示" ' +
+          'value="' + esc(c.title || '') + '">' +
+      '</div>' +
+      '<div class="grid grid-cols-2 gap-3">' +
+        '<div><label class="' + lbl + '">品名</label>' +
+          '<input id="ePartName" class="' + UI.input + '" value="' + esc(c.partName || '') + '"></div>' +
+        '<div><label class="' + lbl + '">廠商</label>' +
+          '<input id="eVendor" class="' + UI.input + '" value="' + esc(c.vendor || '') + '"></div>' +
+        '<div><label class="' + lbl + '">採購單號</label>' +
+          '<input id="ePoNo" class="' + UI.input + '" value="' + esc(c.poNo || '') + '"></div>' +
+        '<div><label class="' + lbl + '">數量</label>' +
+          '<input id="eQty" type="number" class="' + UI.input + '" value="' + esc(c.qty || '') + '"></div>' +
+        '<div><label class="' + lbl + '">單位</label>' +
+          '<input id="eUnit" class="' + UI.input + '" value="' + esc(c.unit || '') + '"></div>' +
+        '<div><label class="' + lbl + '">需求日</label>' +
+          '<input id="eNeedBy" type="date" class="' + UI.input + '" value="' + esc(toDateInput(c.needByDate)) + '"></div>' +
+      '</div>' +
+      '<div>' +
+        '<label class="' + lbl + '">狀況說明 <span class="text-ecoco-orange">*</span></label>' +
+        '<textarea id="eDesc" rows="6" class="' + UI.input + ' resize-y">' + esc(c.description || '') + '</textarea>' +
+      '</div>' +
+      (current.length
+        ? '<div>' +
+            '<label class="' + lbl + '">現有附件</label>' +
+            '<p class="text-xs font-medium text-muted mb-2">移除的檔案不會消失，' +
+              '會留在右側「處理紀錄」裡隨時可以回頭看</p>' +
+            '<div id="edExisting" class="grid grid-cols-3 sm:grid-cols-4 gap-2"></div>' +
+          '</div>'
+        : '') +
+      '<div>' +
+        '<label class="' + lbl + '">新增附件</label>' +
+        '<div id="edUp"></div>' +
+      '</div>';
+
+    var handlingBlock = !canHandle ? '' :
+      '<div>' +
+        '<label class="' + lbl + '">承辦人</label>' +
+        '<select id="eAssignee" class="' + UI.input + '">' + memberOpts + '</select>' +
+      '</div>' +
+      '<div>' +
+        '<label class="' + lbl + '">處理結果</label>' +
+        '<textarea id="eResolution" rows="3" class="' + UI.input + ' resize-y" ' +
+          'placeholder="結案前必須填寫">' + esc(c.resolution || '') + '</textarea>' +
+      '</div>';
+
+    // 廠務部改別人的單時，畫面上只會有處理欄位，要講清楚為什麼看不到內容欄位
+    var contentHint = canContent ? '' :
+      '<div class="bg-card rounded-xl px-4 py-3">' +
+        '<p class="text-xs font-medium text-ink2 leading-relaxed">' +
+          '案件內容（料號、狀況說明、附件）只有開單人能修改。' +
+          '要補充資訊或附照片，請直接在下方留言。</p>' +
+      '</div>';
+
+    var m = UI.modal({
+      title: '編輯 ' + c.caseId,
+      body: '<div class="space-y-5">' + contentHint + contentBlock + handlingBlock +
+        '<div>' +
+          '<label class="' + lbl + '">修改原因（選填）</label>' +
+          '<input id="eNote" class="' + UI.input + '" placeholder="例：廠商重拍了清楚的缺陷照片">' +
+        '</div>' +
+      '</div>',
+    });
+
+    var $ = function (id) { return m.body.querySelector('#' + id); };
+
+    if (canContent) {
+      m.body.querySelector('#edUp').appendChild(up.el);
+
+      // 類型 chip 跟開單共用；「其他」不強制填料號，星號要跟著切
+      typeSel = mountTypeChips($('edTypeRow'), c.type, function (t) {
+        var el = $('edLblPartNo');
+        if (!el) return;
+        el.innerHTML = t === '其他'
+          ? '料號 <span class="text-muted">（選填）</span>'
+          : '料號 <span class="text-ecoco-orange">*</span>';
+      });
+    }
+
+    // 現有附件：點一下切換「要不要移除」，真正送出才生效
+    var existingBox = $('edExisting');
+    function paintExisting() {
+      if (!existingBox) return;
+      existingBox.innerHTML = current.map(function (a) {
+        var marked = !!removeIds[a.attachmentId];
+        var inner = /^image\//.test(a.mimeType)
+          ? thumbImg(a)
+          : '<div class="w-full h-full flex items-center justify-center px-1 text-[10px] font-bold ' +
+            'text-muted text-center break-all">' + esc(a.fileName) + '</div>';
+        return '<div class="relative aspect-square rounded-xl overflow-hidden border bg-card transition-all ' +
+          (marked ? 'border-red-400 opacity-40' : 'border-line') + '">' + inner +
+          '<button type="button" data-att="' + esc(a.attachmentId) + '" ' +
+            'class="absolute top-1 right-1 w-6 h-6 rounded-full text-white text-sm leading-none ' +
+            'transition-colors ' + (marked ? 'bg-green-500' : 'bg-ink/70 hover:bg-red-600') + '" ' +
+            'title="' + (marked ? '取消移除' : '移除') + '">' +
+            (marked ? '&#8634;' : '&times;') + '</button></div>';
+      }).join('');
+    }
+    paintExisting();
+    if (existingBox) {
+      existingBox.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-att]');
+        if (!b) return;
+        var id = b.dataset.att;
+        if (removeIds[id]) delete removeIds[id]; else removeIds[id] = true;
+        paintExisting();
+      });
+    }
+
+    m.footer.innerHTML =
+      '<button id="edCancel" class="' + UI.btn.ghost + '">取消</button>' +
+      '<button id="edSave" class="' + UI.btn.primary + '">儲存修改</button>';
+    m.footer.querySelector('#edCancel').addEventListener('click', m.close);
+
+    m.footer.querySelector('#edSave').addEventListener('click', async function () {
+      // 只收「這次真的畫出來」的欄位。沒有權限的那一組完全不進 patch，
+      // 免得送出去被後端以 FORBIDDEN 擋掉整包。
+      var next = {};
+      if (canContent) {
+        next.type = typeSel.get();
+        next.title = $('eTitle').value.trim();
+        next.partNo = $('ePartNo').value.trim();
+        next.partName = $('ePartName').value.trim();
+        next.vendor = $('eVendor').value.trim();
+        next.poNo = $('ePoNo').value.trim();
+        next.qty = $('eQty').value.trim();
+        next.unit = $('eUnit').value.trim();
+        next.needByDate = $('eNeedBy').value.trim();
+        next.description = $('eDesc').value.trim();
+
+        if (!next.type) { UI.toast('請選擇異常類型', 'error'); return; }
+        if (next.type !== '其他' && !next.partNo) { UI.toast('請填寫料號', 'error'); return; }
+        if (!next.description) { UI.toast('請填寫狀況說明', 'error'); return; }
+      }
+      if (canHandle) {
+        next.assignee = $('eAssignee').value.trim();
+        next.resolution = $('eResolution').value.trim();
+      }
+
+      // 只送真的改過的欄位。後端雖然也會 diff，但整包送出去會把
+      // 「別人在我開著這個 Modal 的期間改掉的欄位」一起蓋回舊值。
+      var before = {
+        type: c.type, title: c.title, partNo: c.partNo, partName: c.partName,
+        vendor: c.vendor, poNo: c.poNo, qty: c.qty, unit: c.unit,
+        needByDate: toDateInput(c.needByDate), description: c.description,
+        assignee: c.assignee, resolution: c.resolution,
+      };
+      var patch = {};
+      Object.keys(next).forEach(function (k) {
+        if (next[k] !== String(before[k] == null ? '' : before[k]).trim()) patch[k] = next[k];
+      });
+
+      var toRemove = Object.keys(removeIds);
+      var toAdd = up ? up.payload() : [];
+      if (!Object.keys(patch).length && !toRemove.length && !toAdd.length) {
+        UI.toast('沒有任何修改');
+        return;
+      }
+
+      var btn = this;
+      btn.disabled = true; btn.textContent = '儲存中…';
+      try {
+        await API.updateCase(c.caseId, patch, {
+          addAttachments: toAdd,
+          removeAttachmentIds: toRemove,
+          note: $('eNote').value.trim(),
+        });
+        m.close();
+        UI.toast('已儲存修改', 'ok');
+        renderDetail(c.caseId);
+      } catch (err) {
+        btn.disabled = false; btn.textContent = '儲存修改';
         UI.toast(err.message, 'error');
       }
     });

@@ -111,7 +111,21 @@ window.API = (function () {
     listCases:     function (q)      { return call('cases.list', q || {}); },
     getCase:       function (id)     { return call('cases.get', { caseId: id }); },
     createCase:    function (data)   { return call('cases.create', data); },
-    updateCase:    function (id, p)  { return call('cases.update', { caseId: id, patch: p }); },
+    /**
+     * 編輯案件。欄位、要加的附件、要移除的附件合併成一個請求送出——
+     * 每趟 /exec 固定 ~1.15 秒，拆開送使用者會等很久。
+     * opts: { addAttachments, removeAttachmentIds, note }
+     */
+    updateCase:    function (id, p, opts)  {
+      opts = opts || {};
+      return call('cases.update', {
+        caseId: id,
+        patch: p || {},
+        addAttachments: opts.addAttachments || [],
+        removeAttachmentIds: opts.removeAttachmentIds || [],
+        note: opts.note || '',
+      });
+    },
     setStatus:     function (id, s, note) { return call('cases.setStatus', { caseId: id, status: s, note: note || '' }); },
     addComment:    function (data)   { return call('comments.create', data); },
     editComment:   function (id, b)  { return call('comments.update', { commentId: id, body: b }); },

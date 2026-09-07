@@ -191,6 +191,92 @@ Apps Script 編輯器 → 右上「部署」→「新增部署作業」（第一
 
 ---
 
+## 9. 編輯案件與變更歷程
+
+### 誰可以編輯：兩層權限
+
+「單子寫了什麼」跟「單子處理到哪」是兩件事，所以權限分兩層（都在 `Auth.gs`）：
+
+| 層 | 函式 | 誰 | 管什麼 |
+|---|---|---|---|
+| 內容 | `canEditCaseContent` | **開單人**、admin | `type` `title` `partNo` `partName` `vendor` `poNo` `qty` `unit` `needByDate` `description` + 案件附件 |
+| 處理 | `canEditCase` | 開單人、**廠務部**、admin | `assignee` `resolution`（`canSetStatus` 也是這一層） |
+
+**個人改個人的單** —— 廠務部可以接手處理別人的單、指派承辦人、填處理結果、改狀態，
+但不能去改別人回報的事實（料號寫什麼、狀況說明寫什麼、附了哪些照片）。
+要補充資訊或附照片，走留言，留言本來就人人可發。
+
+admin 兩層都過：開單人離職或單子填錯時得有人能收尾。
+
+`cases.get` 會回 `permissions: { canSetStatus, canEditCase, canEditContent }`，
+前端據此決定「編輯」按鈕出不出現、Modal 裡長哪幾段。
+兩層在後端是分開檢查的（`cases.update` 看這次 patch 碰到哪一組欄位），
+把前端按鈕藏起來不算數。
+
+### 可以改哪些欄位
+
+`Cases.gs` 的 `CASE_CONTENT_FIELDS` 與 `CASE_HANDLING_FIELDS`，
+合起來就是 `cases.update` 的欄位 allow-list。
+
+`status` **兩組都不在** —— 狀態有自己的通知信，一律走 `cases.setStatus`，
+從 `cases.update` 送 `status` 會被擋下並提示改用正確的 action。
+
+必填規則（類型合法、「其他」以外要有料號、描述不可空）是拿**改完之後的樣子**驗的，
+所以「只改類型」也會在讓料號變成必填時被擋下。
+
+### 一次請求做完三件事
+
+`cases.update` 的 payload 同時吃欄位、要加的附件、要移除的附件：
+
+```json
+{
+  "caseId": "FA-2026-0007",
+  "patch": { "partNo": "A-1024", "description": "..." },
+  "addAttachments": [{ "fileName": "new.jpg", "mimeType": "image/jpeg", "dataBase64": "..." }],
+  "removeAttachmentIds": ["A-xxxx"],
+  "note": "廠商重拍了清楚的缺陷照片"
+}
+```
+
+合併成一個 action 是因為 `/exec` 每趟往返固定 ~1.15 秒；換一張圖如果拆成
+「改欄位 + 刪舊圖 + 傳新圖」三個請求，使用者要等三倍時間。
+
+### 每一項變更都會寫進 History
+
+| `action` | `fromValue` → `toValue` | `refId` |
+|---|---|---|
+| 欄位名（`partNo`、`description`…） | 舊值 → 新值（存全文，上限 20000 字） | 空 |
+| `status` | 舊狀態 → 新狀態 | 空 |
+| `attachment.add` | → 檔名 | 新附件的 `attId` |
+| `attachment.remove` | 檔名 → | 被移除附件的 `attId` |
+
+同一次 `cases.update` 產生的每一列共用同一個 `at`，前端就靠這個把它們併成一組顯示。
+`note`（修改原因）會寫進該次的每一列。
+
+### 附件是軟刪除，Drive 檔案刻意留著
+
+移除附件只會把 `Attachments` 的 `isDeleted` / `deletedAt` / `deletedBy` 填上，
+**不會**呼叫 `setTrashed(true)`。
+
+這是刻意的：需求是「換過的圖要看得到舊的」，而 Drive 檔案一旦進垃圾桶，
+縮圖與檢視連結會一起失效，歷程紀錄就只剩一行沒有圖的文字，等於沒留到。
+
+代價是 Drive 空間不會因為移除附件而釋放。真的要清掉必須到 Drive 手動刪，
+刪掉之後那筆歷程紀錄的縮圖就會變成「無法顯示」，其餘資訊（誰、何時、檔名）還在。
+
+`cases.get` 因此回傳兩個陣列：`attachments`（現行）與 `removedAttachments`（已移除），
+前端用後者把歷程裡的舊圖畫出來。列表頁的卡片縮圖只取現行的。
+
+### 升級既有的試算表
+
+這個功能替 `Attachments` 加了 `isDeleted` / `deletedAt` / `deletedBy` 三欄，
+替 `History` 加了 `refId` 一欄，都接在原本欄位的**後面**。
+
+部署新版程式之後**要再跑一次 `setupSheets()`**（選單「初始化工作表」或在編輯器直接執行）
+把表頭補上去。舊資料列不用動：這些欄位讀出來是空字串，
+`isAttachmentDeleted_()` 會當成「沒有被移除」，行為跟升級前一樣。
+
+
 ## 給前端 `api.js` 的重點提醒
 
 - 請求信封：`{ action, token, requestId, payload }`；`token` 是 `session.login` 換回來的

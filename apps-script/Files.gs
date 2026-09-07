@@ -16,6 +16,17 @@ function isImageMime_(mimeType) {
   return String(mimeType || '').indexOf('image/') === 0;
 }
 
+/**
+ * 附件一律「軟刪除」：Attachments 那一列留著、Drive 檔案也不丟垃圾桶。
+ *
+ * 這是刻意的——需求是「換過的圖要看得到舊的」。把 Drive 檔案 setTrashed(true)
+ * 之後縮圖與檢視連結會一起失效，歷程紀錄就只剩一行沒有圖的文字，等於沒留到。
+ * 代價是 Drive 空間不會因為移除附件而釋放，真的要清掉必須到 Drive 手動刪。
+ */
+function isAttachmentDeleted_(row) {
+  return row.isDeleted === true || String(row.isDeleted).toUpperCase() === 'TRUE';
+}
+
 function validateAttachmentSize_(mimeType, decodedLength, fileName) {
   const isImage = isImageMime_(mimeType);
   const limit = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
@@ -68,7 +79,10 @@ function saveAttachments(caseId, commentId, attachments, user) {
       viewUrl: 'https://drive.google.com/file/d/' + file.getId() + '/view',
       thumbUrl: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w400',
       uploadedBy: user ? user.email : '',
-      uploadedAt: nowIso_()
+      uploadedAt: nowIso_(),
+      isDeleted: false,
+      deletedAt: '',
+      deletedBy: ''
     };
     appendRow('Attachments', row);
     saved.push(row);
@@ -90,7 +104,11 @@ function toAttachmentDTO_(row) {
     thumbUrl: row.thumbUrl,
     uploadedBy: row.uploadedBy,
     uploadedByName: resolveDisplayName_(row.uploadedBy),
-    uploadedAt: row.uploadedAt
+    uploadedAt: row.uploadedAt,
+    isDeleted: isAttachmentDeleted_(row),
+    deletedAt: row.deletedAt || '',
+    deletedBy: row.deletedBy || '',
+    deletedByName: row.deletedBy ? resolveDisplayName_(row.deletedBy) : ''
   };
 }
 
@@ -124,6 +142,18 @@ function attachmentsUpload(user, payload) {
   const caseRow = getRowById('Cases', 'caseId', caseId);
   if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
 
+  // 掛在案件上的附件算「內容」，只有開單人（與 admin）能加；
+  // 掛在留言下的則看留言是不是本人寫的。別人要補充照片請直接發留言。
+  if (payload.commentId) {
+    const commentRow = getRowById('Comments', 'commentId', payload.commentId);
+    if (!commentRow) throw new AppError('NOT_FOUND', '找不到留言：' + payload.commentId);
+    if (!(user.role === 'admin' || sameEmail_(user.email, commentRow.authorEmail))) {
+      throw new AppError('FORBIDDEN', '沒有權限在這則留言下加附件');
+    }
+  } else if (!canEditCaseContent(user, caseRow)) {
+    throw new AppError('FORBIDDEN', '只有開單人可以加案件附件，請改用留言附檔');
+  }
+
   const saved = saveAttachments(caseId, payload.commentId || '', [{
     fileName: payload.fileName,
     mimeType: payload.mimeType,
@@ -134,6 +164,13 @@ function attachmentsUpload(user, payload) {
     attachmentCount: Number(caseRow.attachmentCount || 0) + saved.length,
     lastActivityAt: nowIso_()
   });
+
+  // 掛在留言底下的附件由留言本身負責交代，只有直接掛在案件上的才寫入案件歷程
+  if (!payload.commentId) {
+    appendRow('History', makeHistory_(caseId, user, 'attachment.add', {
+      to: saved[0].fileName, refId: saved[0].attId
+    }));
+  }
 
   return { attachment: toAttachmentDTO_(saved[0]) };
 }
@@ -166,7 +203,42 @@ function attachmentsThumb(user, payload) {
   };
 }
 
-/** attachments.delete：把 Drive 檔案丟垃圾桶、Attachments 整列刪除（這裡沒有軟刪除欄位）。 */
+/**
+ * 內部共用：把一個附件標記為已移除，並寫入案件歷程。
+ * 呼叫端要自己先做權限檢查（attachments.delete 與 cases.update 的規則不同）。
+ * 回傳被移除的 Attachments row；已經移除過的回傳 null（重複移除視為沒事發生）。
+ */
+function markAttachmentRemoved_(row, user, at) {
+  if (isAttachmentDeleted_(row)) return null;
+  const now = at || nowIso_();
+
+  updateRowById('Attachments', 'attId', row.attId, {
+    isDeleted: true,
+    deletedAt: now,
+    deletedBy: user.email
+  });
+
+  const caseRow = getRowById('Cases', 'caseId', row.caseId);
+  if (caseRow) {
+    updateRowById('Cases', 'caseId', row.caseId, {
+      attachmentCount: Math.max(0, Number(caseRow.attachmentCount || 0) - 1),
+      lastActivityAt: now
+    });
+  }
+
+  if (!row.commentId) {
+    appendRow('History', makeHistory_(row.caseId, user, 'attachment.remove', {
+      from: row.fileName, refId: row.attId, at: now
+    }));
+  }
+
+  return row;
+}
+
+/**
+ * attachments.delete：軟刪除。Drive 檔案刻意「不」丟垃圾桶，
+ * 這樣歷程紀錄裡的舊圖片才點得開、縮圖才載得出來（見 isAttachmentDeleted_ 的說明）。
+ */
 function attachmentsDelete(user, payload) {
   payload = payload || {};
   const attachmentId = payload.attachmentId;
@@ -174,24 +246,15 @@ function attachmentsDelete(user, payload) {
 
   const row = getRowById('Attachments', 'attId', attachmentId);
   if (!row) throw new AppError('NOT_FOUND', '找不到附件：' + attachmentId);
-  if (!(user.role === 'admin' || sameEmail_(user.email, row.uploadedBy))) {
-    throw new AppError('FORBIDDEN', '沒有權限刪除這個附件');
-  }
 
-  try {
-    DriveApp.getFileById(row.driveFileId).setTrashed(true);
-  } catch (err) {
-    console.error('attachmentsDelete: 丟到垃圾桶失敗（可能檔案已被手動刪除）: ' + err);
-  }
-  deleteRowById('Attachments', 'attId', attachmentId);
-
+  // 上傳者可以拿掉自己上傳的檔；除此之外就是內容層權限（開單人 / admin）。
   const caseRow = getRowById('Cases', 'caseId', row.caseId);
-  if (caseRow) {
-    updateRowById('Cases', 'caseId', row.caseId, {
-      attachmentCount: Math.max(0, Number(caseRow.attachmentCount || 0) - 1),
-      lastActivityAt: nowIso_()
-    });
+  const allowed = sameEmail_(user.email, row.uploadedBy) ||
+    (caseRow && canEditCaseContent(user, caseRow));
+  if (!allowed) {
+    throw new AppError('FORBIDDEN', '沒有權限移除這個附件');
   }
 
+  markAttachmentRemoved_(row, user);
   return { ok: true };
 }

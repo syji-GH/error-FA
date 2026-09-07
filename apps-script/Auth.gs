@@ -267,13 +267,31 @@ function sameEmail_(a, b) {
   return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 }
 
+/*
+ * 案件的權限分兩層，因為「單子寫了什麼」跟「單子處理到哪」是兩件事：
+ *
+ *   canEditCaseContent  內容：類型、料號、描述、附件……
+ *                       → 個人改個人的單（開單人），admin 保留後門。
+ *                       廠務部不能改別人回報的事實，要補充請用留言。
+ *
+ *   canEditCase         處理：承辦人、處理結果（搭配 canSetStatus 的狀態變更）
+ *                       → 廠務部要能接手處理別人的單，所以比內容寬一級。
+ *
+ * admin 兩層都過：開單人離職或單子填錯得有人能收尾。
+ */
+function canEditCaseContent(user, caseRow) {
+  if (!user || !caseRow) return false;
+  if (user.role === 'admin') return true;
+  return sameEmail_(user.email, caseRow.createdBy);
+}
+
 function canEditCase(user, caseRow) {
   if (!user || !caseRow) return false;
   if (user.role === 'admin' || user.role === 'facility') return true;
   return sameEmail_(user.email, caseRow.createdBy);
 }
 
-/** 狀態變更權限：目前規則與 canEditCase 相同（admin/facility/開單人），獨立命名方便未來拆開。 */
+/** 狀態變更權限：與 canEditCase 相同（admin/facility/開單人），獨立命名方便未來拆開。 */
 function canSetStatus(user, caseRow) {
   return canEditCase(user, caseRow);
 }

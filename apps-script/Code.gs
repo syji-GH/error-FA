@@ -26,7 +26,7 @@ const SPREADSHEET_ID = 'REPLACE_ME';
 
 // 每次部署前手動 +1（或改成日期字串），doGet 會回傳這個版本號，
 // 一看就知道 /exec 上線的是哪一版，避免部署到錯的 deployment id 卻沒發現。
-const SCRIPT_VERSION = '2026-08-18.6';
+const SCRIPT_VERSION = '2026-09-07.7';
 
 // 案件描述 / 留言內容都是純文字（前端用 white-space:pre-wrap 顯示，自動連結網址），
 // 不接受也不需要 HTML，這裡只做長度上限保護。
@@ -42,6 +42,29 @@ function getSpreadsheetId_() {
 
 function nowIso_() {
   return new Date().toISOString();
+}
+
+/**
+ * 產生一列 History。所有會改變案件的操作都必須留下紀錄——包含附件的新增與移除，
+ * 因為「舊圖片還看得到」靠的就是這一列的 refId 指回那個附件。
+ *
+ * opts: { from, to, note, refId, at }
+ *   at 可以外部指定，讓同一次編輯裡的多列共用同一個時間戳，前端才好把它們併成一組顯示。
+ */
+function makeHistory_(caseId, user, action, opts) {
+  opts = opts || {};
+  return {
+    histId: 'H-' + Utilities.getUuid(),
+    caseId: caseId,
+    at: opts.at || nowIso_(),
+    actorEmail: user ? user.email : '',
+    actorName: user ? user.name : '',
+    action: action,
+    fromValue: opts.from === undefined || opts.from === null ? '' : opts.from,
+    toValue: opts.to === undefined || opts.to === null ? '' : opts.to,
+    note: opts.note || '',
+    refId: opts.refId || ''
+  };
 }
 
 /** 統一的業務錯誤：code 對應 UNAUTHENTICATED/FORBIDDEN/NOT_FOUND/BAD_REQUEST/CONFLICT/INTERNAL */

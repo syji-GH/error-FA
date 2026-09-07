@@ -12,8 +12,11 @@ const SHEET_SCHEMAS = {
   Comments: ['commentId', 'caseId', 'parentId', 'createdAt', 'authorEmail', 'authorName',
     'body', 'isEdited', 'editedAt', 'isDeleted'],
   Attachments: ['attId', 'caseId', 'commentId', 'fileName', 'mimeType', 'size',
-    'driveFileId', 'viewUrl', 'thumbUrl', 'uploadedBy', 'uploadedAt'],
-  History: ['histId', 'caseId', 'at', 'actorEmail', 'actorName', 'action', 'fromValue', 'toValue', 'note'],
+    'driveFileId', 'viewUrl', 'thumbUrl', 'uploadedBy', 'uploadedAt',
+    'isDeleted', 'deletedAt', 'deletedBy'],
+  // refId 指向這筆紀錄牽涉到的附件（attId），讓前端可以在歷程裡把「當時那張圖」畫出來
+  History: ['histId', 'caseId', 'at', 'actorEmail', 'actorName', 'action',
+    'fromValue', 'toValue', 'note', 'refId'],
   Members: ['email', 'name', 'dept', 'role', 'notify', 'active'],
   Config: ['key', 'value']
 };

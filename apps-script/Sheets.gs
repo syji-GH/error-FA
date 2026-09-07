@@ -136,7 +136,11 @@ function updateRowById(name, idColumn, id, patch) {
   return result;
 }
 
-/** 依 id 整列刪除（目前只有 attachments.delete 用到；其他刪除一律走軟刪除 isDeleted）。 */
+/**
+ * 依 id 整列刪除。**目前沒有任何地方呼叫**——留著是當資料層的完整度。
+ * 留言、附件一律走軟刪除（isDeleted）：單子的變更歷程要能回頭看，
+ * 把列刪掉就什麼都不剩了。
+ */
 function deleteRowById(name, idColumn, id) {
   const sh = sheet(name);
   const headers = headersOf_(sh);
