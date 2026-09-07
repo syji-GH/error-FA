@@ -250,8 +250,9 @@ Sheets 會把長得像 `h:mm` 的字串轉成時間值，而且**分鐘要兩位
 `Comments.gs` 三個寫入路徑原本完全沒上鎖，已補上。`comments.create` 的附件上傳刻意留在鎖
 外面：Drive 往返可能好幾秒，不該佔著全域鎖擋住其他人。
 
-`Cases.gs` 的三個寫入路徑比這個 helper 早寫，目前仍是同樣邏輯自己展開在函式裡（行為一致，
-只是沒共用）。新的寫入路徑一律用 `withWriteLock_`，不要再手寫一次。
+所有會寫入的路徑都走 `withWriteLock_`：`cases.create`（取案號）、`cases.update`、
+`cases.setStatus`、`comments.create` / `update` / `delete`。不要再手寫一次鎖，
+漏掉 `flush()` 或忘了在鎖裡重讀，錯法都是安靜的。
 
 ## 11. 初始化資料
 

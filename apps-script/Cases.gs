@@ -191,11 +191,7 @@ function allocateCaseId_(year, usedIds, minSeq) {
  * 只信計數器就會發出已經存在的號，而 getRowById 只回第一筆，後開的那張單就再也點不開。
  */
 function nextCaseId_() {
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) {
-    throw new AppError('CONFLICT', '系統忙碌中，請稍後再試（取得案號逾時）');
-  }
-  try {
+  return withWriteLock_(function () {
     // 鎖到手才讀，而且要繞過本次執行的讀取快取，否則可能拿到進鎖之前的舊值
     invalidateSheetCache_('Cases');
     invalidateSheetCache_('Config');
@@ -213,13 +209,9 @@ function nextCaseId_() {
     const allocated = allocateCaseId_(year, usedCaseIds_(), hintSeq);
     setConfig('lastCaseSeq', year + ':' + allocated.seq);
 
-    // 一定要在放開鎖之前把待寫入真的送進試算表。Apps Script 的試算表寫入是批次的，
-    // 不 flush 就放鎖的話，下一個請求進鎖後讀到的還是舊的計數器。
-    SpreadsheetApp.flush();
+    // withWriteLock_ 會在放鎖之前 flush，否則下一個請求進鎖後讀到的還是舊的計數器
     return allocated.caseId;
-  } finally {
-    lock.releaseLock();
-  }
+  }, '系統忙碌中，請稍後再試（取得案號逾時）');
 }
 
 function casesCreate(user, payload) {
@@ -387,11 +379,7 @@ function casesUpdate(user, payload) {
     throw new AppError('BAD_REQUEST', '修改原因過長（上限 ' + MAX_TEXT_LEN + ' 字）');
   }
 
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) {
-    throw new AppError('CONFLICT', '系統忙碌中，請稍後再試');
-  }
-  try {
+  return withWriteLock_(function () {
     const caseRow = getRowById('Cases', 'caseId', caseId);
     if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
 
@@ -494,11 +482,7 @@ function casesUpdate(user, payload) {
       addedAttachments: added.map(toAttachmentDTO_),
       removedAttachmentIds: removed.map(function (r) { return r.attId; })
     };
-  } finally {
-    // 放鎖之前先把待寫入送進試算表，否則下一個請求可能讀到還沒落地的舊資料
-    SpreadsheetApp.flush();
-    lock.releaseLock();
-  }
+  });
 }
 
 /** cases.setStatus：獨立於 cases.update，因為狀態變更有自己的權限規則且一定要留 History。 */
@@ -513,11 +497,7 @@ function casesSetStatus(user, payload) {
     throw new AppError('BAD_REQUEST', '狀態不正確');
   }
 
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) {
-    throw new AppError('CONFLICT', '系統忙碌中，請稍後再試');
-  }
-  try {
+  return withWriteLock_(function () {
     const caseRow = getRowById('Cases', 'caseId', caseId);
     if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
     if (!canSetStatus(user, caseRow)) {
@@ -555,11 +535,7 @@ function casesSetStatus(user, payload) {
     }
 
     return { case: updated, historyEntry: toHistoryDTO_(historyRow) };
-  } finally {
-    // 放鎖之前先把待寫入送進試算表，否則下一個請求可能讀到還沒落地的舊資料
-    SpreadsheetApp.flush();
-    lock.releaseLock();
-  }
+  });
 }
 
 function casesStats(user, payload) {

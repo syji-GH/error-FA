@@ -77,13 +77,12 @@ function makeHistory_(caseId, user, action, opts) {
  * 為什麼一定要 flush：Apps Script 的試算表寫入是批次的，不 flush 就放鎖的話，
  * 下一個請求進鎖後讀到的還是舊值——案號撞號就有這個成分在。
  *
- * 注意 Cases.gs 的三個寫入路徑比這個 helper 早寫，目前仍是同樣邏輯自己展開在函式裡，
- * 行為一致但沒共用；新的寫入路徑一律用這個，不要再手寫一次。
+ * busyMessage 只在需要讓使用者看出「卡在哪一步」時才傳（例如取案號逾時）。
  */
-function withWriteLock_(fn, timeoutMs) {
+function withWriteLock_(fn, busyMessage, timeoutMs) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(timeoutMs || 10000)) {
-    throw new AppError('CONFLICT', '系統忙碌中，請稍後再試');
+    throw new AppError('CONFLICT', busyMessage || '系統忙碌中，請稍後再試');
   }
   try {
     return fn();
