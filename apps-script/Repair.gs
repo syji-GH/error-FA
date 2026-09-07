@@ -377,3 +377,71 @@ function diagnoseDataIntegrity() {
   notice_(problems ? '發現 ' + problems + ' 個問題，詳見執行紀錄' : '健檢通過');
   return out;
 }
+
+/*
+ * ══════════════ 寫入行為探測 ══════════════
+ *
+ * setValue 對開頭是 '=' 的字串一定當公式處理，跟儲存格格式無關（官方文件明寫），
+ * 所以只靠 @ 格式擋不住公式——實測 '=1+1 測試' 會變成 #ERROR!。
+ * 這支把幾種寫法用同一批難搞的字串跑過，直接看讀回來是什麼，不要用猜的。
+ *
+ * 會開一張暫存分頁、跑完自己刪掉，不碰任何正式資料。
+ */
+function probeCellWriteBehaviour() {
+  const samples = [
+    '=1+1 測試', '=SUM(A1:A9)', '0012345', '+886912345678',
+    '-5V 沒輸出', '2026-09', '3/4', '2026:10', 'PCB-005-01'
+  ];
+  const methods = [
+    { label: 'A  @格式 + setValue（目前做法）', write: function (cell, s) {
+        cell.setNumberFormat('@'); cell.setValue(s);
+      } },
+    { label: 'B  @格式 + 前綴單引號', write: function (cell, s) {
+        cell.setNumberFormat('@'); cell.setValue("'" + s);
+      } },
+    { label: 'C  一般格式 + 前綴單引號', write: function (cell, s) {
+        cell.setValue("'" + s);
+      } },
+    { label: 'D  @格式 + setRichTextValue', write: function (cell, s) {
+        cell.setNumberFormat('@');
+        cell.setRichTextValue(SpreadsheetApp.newRichTextValue().setText(s).build());
+      } }
+  ];
+
+  const ss = getSS();
+  const sh = ss.insertSheet('_probe_' + Date.now());
+  try {
+    const lines = [];
+    const score = methods.map(function () { return 0; });
+
+    samples.forEach(function (s, i) {
+      const row = i + 1;
+      methods.forEach(function (m, c) {
+        try { m.write(sh.getRange(row, c + 1), s); }
+        catch (err) { /* 寫不進去就留空，下面會顯示成不一致 */ }
+      });
+      SpreadsheetApp.flush();
+
+      const got = sh.getRange(row, 1, 1, methods.length).getValues()[0];
+      lines.push('輸入 ' + JSON.stringify(s));
+      methods.forEach(function (m, c) {
+        const v = got[c];
+        const shown = (v instanceof Date) ? v.toISOString() : v;
+        const ok = (v === s);
+        if (ok) score[c] += 1;
+        lines.push('   ' + (ok ? 'OK ' : ' X ') + m.label + ' → ' + JSON.stringify(shown));
+      });
+    });
+
+    lines.push('');
+    lines.push('總分（共 ' + samples.length + ' 個樣本，越高越好）：');
+    methods.forEach(function (m, c) { lines.push('   ' + score[c] + ' / ' + samples.length + '  ' + m.label); });
+
+    const out = lines.join('\n');
+    console.log(out);
+    notice_('探測完成，詳見執行紀錄');
+    return out;
+  } finally {
+    ss.deleteSheet(sh);
+  }
+}
