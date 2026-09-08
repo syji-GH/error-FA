@@ -167,6 +167,18 @@ Apps Script 編輯器 → 右上「部署」→「新增部署作業」（第一
 - 或在 Apps Script 編輯器手動加：觸發條件 → 新增觸發條件 → 函式選 `purgeExpiredSessions` →
   事件來源「時間驅動」→ 「日計時器」。
 
+`appsscript.json` 的 `oauthScopes` 一旦明確列出，Apps Script 就**不再自動偵測**程式碼用到什麼。
+所以任何用到 `ScriptApp.newTrigger` / `getProjectTriggers` 的函式——`ensureKeepWarmTrigger`、
+`ensureDailyPurgeTrigger`——都需要清單裡有：
+
+```
+https://www.googleapis.com/auth/script.scriptapp
+```
+
+少了它會在執行時擲出「Specified permissions are not sufficient to call
+ScriptApp.getProjectTriggers」。改完 scope 之後要 `clasp push`，然後在編輯器隨便執行一次函式，
+會重新跳授權畫面把新 scope 授予出去。
+
 ## 7. 附件大小上限——這是實測值，不是官方保證的數字
 
 | 類型 | 上限 | 理由 |
