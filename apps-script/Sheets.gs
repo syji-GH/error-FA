@@ -119,11 +119,51 @@ function isTextColumn_(sheetName, header) {
   return !!cols && cols.indexOf(header) !== -1;
 }
 
+/*
+ * '=' 開頭的字串一定會被 setValue / setValues 當成公式，而且**@ 格式擋不住**——
+ * 官方文件就是這樣寫的，實測也一致：描述填「=1+1 測試」會存成 #ERROR!。
+ *
+ * @ 格式擋得住的是另一類：數字與日期的轉型（0012345、2026:10、2026-09、3/4 都保得住）。
+ * 這兩件事要分開處理，別以為設了格式就沒事。
+ *
+ * 解法是 Sheets 的「這是文字」標記：值前面加一個單引號寫進去，讀回來不會帶著它。
+ * 實測九種難搞的字串全部原樣往返。（setRichTextValue 不能用——它會把
+ * "+886912345678" 變成 "=+886912345678"，反而生出一個公式。）
+ *
+ * 只處理 '=' 開頭。'+' 與 '-' 開頭在 @ 格式下實測是安全的，多繞一趟只是浪費 API 往返，
+ * 而「-5V 沒輸出」這種描述在這個系統裡很常見。
+ */
+function isFormulaLike_(v) {
+  return typeof v === 'string' && v.charAt(0) === '=';
+}
+
+/**
+ * 從整列的值裡把 '=' 開頭的文字欄位挑出來，在批次寫入時先留空，回傳待補寫的清單。
+ *
+ * 刻意不先寫進去再蓋掉：使用者輸入的公式就算只存在一瞬間也可能被求值，
+ * IMPORTDATA 這類函式會真的送出請求。
+ */
+function deferFormulaLikeCells_(sheetName, headers, row) {
+  const deferred = [];
+  headers.forEach(function (h, c) {
+    if (!isTextColumn_(sheetName, h) || !isFormulaLike_(row[c])) return;
+    deferred.push({ col: c, text: row[c] });
+    row[c] = '';
+  });
+  return deferred;
+}
+
+function writeDeferredCells_(sh, rowIdx, deferred) {
+  deferred.forEach(function (d) {
+    sh.getRange(rowIdx, d.col + 1).setValue("'" + d.text);
+  });
+}
+
 /**
  * 依表頭順序把物件轉成一列寫入分頁最後。
  *
  * 不用 sh.appendRow()，因為格式一定要在寫值「之前」設好——先把文字欄位鎖成純文字，
- * Sheets 才不會在寫入的當下就把字串猜成公式／數字／日期。
+ * Sheets 才不會在寫入的當下就把字串猜成數字或日期。
  */
 function appendRow(name, obj) {
   const sh = sheet(name);
@@ -149,7 +189,10 @@ function appendRow(name, obj) {
     touched = true;
   });
   if (touched) range.setNumberFormats([formats]);
+
+  const deferred = deferFormulaLikeCells_(name, headers, row);
   range.setValues([row]);
+  writeDeferredCells_(sh, targetRow, deferred);
 
   invalidateSheetCache_(name);
   return obj;
@@ -189,10 +232,15 @@ function updateRowById(name, idColumn, id, patch) {
     result[h] = normalizeCell_(values[c]);
   }
 
-  // 格式一定要在寫值之前設好，否則 Sheets 在寫入的當下就把字串猜成公式／數字／日期了
+  // 格式一定要在寫值之前設好，否則 Sheets 在寫入的當下就把字串猜成數字或日期了
   lockCols.forEach(function (c) { sh.getRange(rowIdx, c + 1).setNumberFormat('@'); });
 
+  // 注意這裡要掃整列，不是只掃 patch 到的欄位：setValues 是整列寫回去的，
+  // 沒被改到的格子如果本來就存著 '=' 開頭的文字，這一寫就會被重新解讀成公式。
+  const deferred = deferFormulaLikeCells_(name, headers, values);
   rowRange.setValues([values]);
+  writeDeferredCells_(sh, rowIdx, deferred);
+
   invalidateSheetCache_(name);
   return result;
 }
@@ -252,6 +300,7 @@ function setConfig(key, value) {
 
   const cell = sh.getRange(rowIdx, valueCol + 1);
   cell.setNumberFormat('@');
-  cell.setValue(value === undefined || value === null ? '' : value);
+  const v = (value === undefined || value === null) ? '' : value;
+  cell.setValue(isFormulaLike_(v) ? "'" + v : v);
   invalidateSheetCache_('Config');
 }
