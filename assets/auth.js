@@ -222,6 +222,26 @@ window.Auth = (function () {
     document.getElementById('app').classList.add('hidden');
     document.getElementById('gate').classList.remove('hidden');
   }
+
+  /**
+   * 開站時 session.resume 那一趟要等後端回來，冷啟動實測 8 秒以上
+   * （Apps Script 把容器叫醒的時間，跟我們的程式碼無關）。
+   *
+   * 這段期間原本畫面停在登入閘門，看起來像在要使用者重新登入——明明上一秒還登著。
+   * 改成先把 app 外框和骨架畫出來：等待時間沒變短，但看得出來是在載入而不是壞了。
+   * 資料還沒到，所以 header 上的操作先鎖住，避免點了沒反應。
+   */
+  function showBooting() {
+    document.getElementById('gate').classList.add('hidden');
+    var app = document.getElementById('app');
+    app.classList.remove('hidden');
+    app.classList.add('is-booting');
+    var view = document.getElementById('view');
+    if (view && window.UI) view.innerHTML = window.UI.skeleton(4);
+  }
+  function endBooting() {
+    document.getElementById('app').classList.remove('is-booting');
+  }
   function gateError(msg) {
     var el = document.getElementById('gateError');
     el.textContent = msg || '';
@@ -271,6 +291,7 @@ window.Auth = (function () {
     // 重新整理時若 session 還在，直接續用，不打擾使用者
     var saved = loadSession();
     if (saved) {
+      showBooting();
       try {
         var data = await window.API.resume(saved, true);
         sessionToken = saved;
@@ -279,10 +300,13 @@ window.Auth = (function () {
         startIdleWatch();
         user = data.user;
         if (data.boot) bootData = data.boot;
+        endBooting();
         enterApp();
         return;
       } catch (e) {
+        endBooting();
         clearSession();
+        showGate();
       }
     }
 

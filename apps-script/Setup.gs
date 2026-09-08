@@ -138,6 +138,66 @@ function ensureDailyPurgeTrigger() {
   return '已建立';
 }
 
+/*
+ * ══════════════ 保溫 ══════════════
+ *
+ * 實測 /exec 的 ping（後端什麼事都不做）：
+ *   冷啟動 8.34 秒 ／ 熱的時候 1.03 秒
+ *
+ * 那 7 秒全是 Apps Script 把容器叫醒的時間，跟我們的程式碼、跟資料量都無關。
+ * 容器閒置一陣子就會被回收，所以早上第一次開、午休後回來開，都會吃到這 7 秒。
+ * 剩下的 1 秒是 /exec 回應前那個 302 轉址，那個省不掉。
+ *
+ * 對策是讓專案定期跑一下，別讓容器睡著。
+ */
+
+/** 保溫用的空跑。上班時段順便碰一下試算表，讓 Sheets 連線也是熱的。 */
+function keepWarm() {
+  const tz = Session.getScriptTimeZone();
+  const now = new Date();
+  const hour = Number(Utilities.formatDate(now, tz, 'H'));
+  const weekday = Number(Utilities.formatDate(now, tz, 'u'));   // 1=週一 … 7=週日
+
+  // 非上班時段就讓它空跑。執行本身已經足以保溫，沒必要一天多開幾百次試算表。
+  if (weekday > 5 || hour < 7 || hour >= 20) return 'idle';
+
+  sheet('Config').getRange(1, 1).getValue();
+  return 'warm';
+}
+
+const KEEP_WARM_MINUTES = 5;
+
+/**
+ * 建立保溫排程（每 5 分鐘）。可重複執行，已經有了就不會重複建立。
+ *
+ * 額度：一天約 288 次、每次不到一秒，Workspace 帳號的觸發器總執行時間上限是
+ * 每天 6 小時，用掉的是零頭。
+ */
+function ensureKeepWarmTrigger() {
+  const already = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'keepWarm';
+  });
+  if (already) {
+    notice_('保溫排程已經存在，不用重設');
+    return '已存在';
+  }
+  ScriptApp.newTrigger('keepWarm').timeBased().everyMinutes(KEEP_WARM_MINUTES).create();
+  notice_('已設定保溫排程（每 ' + KEEP_WARM_MINUTES + ' 分鐘）');
+  return '已建立';
+}
+
+/** 不想要保溫了就跑這個，把排程移除。 */
+function removeKeepWarmTrigger() {
+  let removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() !== 'keepWarm') return;
+    ScriptApp.deleteTrigger(t);
+    removed += 1;
+  });
+  notice_(removed ? '已移除保溫排程' : '本來就沒有保溫排程');
+  return removed;
+}
+
 /**
  * 診斷用：新開單的通知會寄給誰？順便回報今天還剩多少寄信額度。
  * 在編輯器直接執行，看「執行紀錄」的輸出即可，不用真的開一張單去試。
@@ -178,6 +238,7 @@ function onOpen() {
     .createMenu('error-FA')
     .addItem('初始化工作表', 'setupSheets')
     .addItem('設定每日清理排程（Session）', 'ensureDailyPurgeTrigger')
+    .addItem('設定保溫排程（減少冷啟動）', 'ensureKeepWarmTrigger')
     .addItem('檢查通知收件人', 'whoGetsNewCaseMail')
     .addSeparator()
     .addItem('資料健檢', 'diagnoseDataIntegrity')

@@ -24,6 +24,10 @@ body { -webkit-tap-highlight-color: transparent; }
 @keyframes fa-pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 .fa-skel { background: #F0F3F7; animation: fa-pulse 1.4s ease-in-out infinite; }
 
+/* 開站載入中：外框先畫出來，但 header 的操作還不能點（handler 尚未綁上） */
+#app.is-booting #btnNew,
+#app.is-booting #btnUser { opacity: .45; pointer-events: none; }
+
 /* Google 登入按鈕容器置中 */
 #gsiButton > div { margin: 0 auto; }
 
