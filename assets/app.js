@@ -1333,13 +1333,22 @@
 
   /* ══════════════ 啟動 ══════════════ */
 
-  function bindHeader(u) {
+  /**
+   * 只畫使用者資訊，不綁事件。
+   * 開站若用了快取，onReady 會被呼叫兩次（先快取、後端回來再一次），
+   * 而角色是後端說了算——快取那份可能已經被管理員改過了，第二次要蓋回去。
+   */
+  function paintHeaderUser(u) {
     document.getElementById('userAvatar').textContent = UI.initials(u.name, u.email);
     document.getElementById('userName').textContent = u.name || u.email;
     document.getElementById('menuName').textContent = u.name || '';
     document.getElementById('menuEmail').textContent = u.email;
     document.getElementById('menuRole').textContent =
       u.role === 'admin' ? '管理員' : u.role === 'facility' ? '廠務部' : '一般使用者';
+  }
+
+  function bindHeader(u) {
+    paintHeaderUser(u);
 
     var sheet = document.getElementById('menuSheet');
     if (window.CONFIG.SHEET_URL) sheet.href = window.CONFIG.SHEET_URL;
@@ -1374,6 +1383,8 @@
       bindHeader(u);
       window.addEventListener('hashchange', route);
       applyMeta(pendingMeta);
+    } else {
+      paintHeaderUser(u);
     }
     route();
   });

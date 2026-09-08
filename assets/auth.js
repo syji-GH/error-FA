@@ -17,6 +17,7 @@
 window.Auth = (function () {
 
   var SESSION_KEY = 'faSession';
+  var BOOT_KEY = 'faBoot';
 
   // 閒置逾時：超過 CONFIG.IDLE_MINUTES 分鐘沒有任何操作就自動登出。設 0 表示不啟用。
   var IDLE_LIMIT_MS = Math.max(0, Number(window.CONFIG.IDLE_MINUTES) || 0) * 60 * 1000;
@@ -81,6 +82,48 @@ window.Auth = (function () {
     user = null;
     stopIdleWatch();
     try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    clearBootCache();
+  }
+
+  /* ── 開站資料快取 ─────────────────────────────────────── */
+  /**
+   * 把上一次開站拿到的 stats/list/meta 存起來，下次開站先畫舊的、同時在背景重新抓，
+   * 資料回來再換掉（stale-while-revalidate）。冷啟動那 8 秒省不掉，但使用者不用盯著
+   * 骨架等——一進來就看得到上次的清單。
+   *
+   * 這份快取跟 session 綁在一起：clearSession() 會一併清掉，所以登出、閒置逾時、
+   * 或別的分頁登出之後，下一個人不會看到前一個人的資料。要先看得到內容，前提是
+   * loadSession() 通過（絕對壽命 12 小時 + 閒置逾時都還沒到）。
+   *
+   * 代價要講清楚：這是在「後端確認 session 之前」就先畫出來。後端唯一可能推翻的情況
+   * 是 session 已在別的裝置登出或伺服器端過期——那時 resume 會失敗，畫面會退回登入閘門。
+   */
+  function saveBootCache(u, boot) {
+    if (!u || !boot) return;
+    try {
+      localStorage.setItem(BOOT_KEY, JSON.stringify({ at: Date.now(), user: u, boot: boot }));
+    } catch (e) { /* 配額滿了就算了，只是少一層快取 */ }
+  }
+
+  function loadBootCache() {
+    try {
+      var raw = localStorage.getItem(BOOT_KEY);
+      if (!raw) return null;
+      var c = JSON.parse(raw);
+      if (!c || !c.user || !c.boot) return null;
+      // 跟 session 的絕對壽命對齊，太舊的寧可等後端
+      if (Date.now() - Number(c.at || 0) > 12 * 60 * 60 * 1000) return null;
+      return c;
+    } catch (e) { return null; }
+  }
+
+  function clearBootCache() {
+    try { localStorage.removeItem(BOOT_KEY); } catch (e) {}
+  }
+
+  function bootHint(show) {
+    var el = document.getElementById('bootHint');
+    if (el) el.classList.toggle('hidden', !show);
   }
 
   /* ── 閒置逾時 ─────────────────────────────────────────── */
@@ -148,7 +191,10 @@ window.Auth = (function () {
       var data = await window.API.login(resp.credential, wantBoot);
       saveSession(data.sessionToken, data.expiresAt);
       user = data.user;
-      if (data.boot) bootData = data.boot;
+      if (data.boot) {
+        bootData = data.boot;
+        saveBootCache(user, data.boot);
+      }
 
       // 有人在等重新驗證就先餵給他
       if (reauthPending) { reauthPending.resolve(sessionToken); reauthPending = null; return; }
@@ -260,6 +306,12 @@ window.Auth = (function () {
       return;
     }
 
+    // 這兩件事都不等 GIS。gsi/client 是 async defer，排在它後面的話：
+    // 畫快取的意義會被那段等待吃掉，而續用 session 只需要一張 token，
+    // 兩者都用不到 Google 登入元件。resume 提前發出去，正好跟 GIS 載入平行跑。
+    primeFromCache();
+    resumeDone = resumeSession();
+
     var tries = 0;
     (function waitForGis() {
       if (!window.google || !google.accounts || !google.accounts.id) {
@@ -271,6 +323,67 @@ window.Auth = (function () {
       }
       start();
     })();
+  }
+
+  var primed = false;       // 已經用快取進場了嗎
+  var resumeDone = null;    // Promise<boolean>：既有 session 有沒有成功續用
+
+  function primeFromCache() {
+    var saved = loadSession();
+    if (!saved) return;
+
+    var cached = loadBootCache();
+    if (!cached) return;
+
+    sessionToken = saved;
+    lastTouch = 0;        // 開站本身算一次操作，把閒置計時歸零
+    touch();
+    startIdleWatch();
+
+    user = cached.user;
+    bootData = cached.boot;
+    primed = true;
+    endBooting();
+    enterApp();
+    bootHint(true);
+  }
+
+  /**
+   * 重新整理時若 session 還在，直接續用，不打擾使用者。
+   * 回傳「有沒有成功進場」，start() 靠它決定要不要跳 Google 登入。
+   */
+  async function resumeSession() {
+    var saved = loadSession();
+    if (!saved) return false;
+
+    if (!primed) {
+      sessionToken = saved;
+      lastTouch = 0;        // 開站本身算一次操作，把閒置計時歸零
+      touch();
+      startIdleWatch();
+      showBooting();        // 沒有快取可畫，至少讓人看得出來是在載入
+    }
+
+    try {
+      var data = await window.API.resume(saved, true);
+      user = data.user;
+      if (data.boot) {
+        bootData = data.boot;
+        saveBootCache(user, data.boot);
+      }
+      bootHint(false);
+      endBooting();
+      // 已經用快取進場的話這是第二次呼叫 onReady，app.js 會拿新的 bootData 重畫一次
+      if (primed) { if (onReady) onReady(user); }
+      else enterApp();
+      return true;
+    } catch (e) {
+      bootHint(false);
+      endBooting();
+      clearSession();
+      showGate();
+      return false;
+    }
   }
 
   async function start() {
@@ -288,27 +401,8 @@ window.Auth = (function () {
       text: 'signin_with', shape: 'pill', locale: 'zh_TW', width: 280,
     });
 
-    // 重新整理時若 session 還在，直接續用，不打擾使用者
-    var saved = loadSession();
-    if (saved) {
-      showBooting();
-      try {
-        var data = await window.API.resume(saved, true);
-        sessionToken = saved;
-        lastTouch = 0;        // 開站本身算一次操作，把閒置計時歸零
-        touch();
-        startIdleWatch();
-        user = data.user;
-        if (data.boot) bootData = data.boot;
-        endBooting();
-        enterApp();
-        return;
-      } catch (e) {
-        endBooting();
-        clearSession();
-        showGate();
-      }
-    }
+    // resume 在 init() 就發出去了，這裡只等它的結果決定要不要打擾使用者
+    if (await resumeDone) return;
 
     google.accounts.id.prompt();
   }

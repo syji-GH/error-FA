@@ -438,6 +438,24 @@ curl -sL -o /dev/null -X POST -H 'Content-Type: text/plain' \
 `showBooting()`：有 session 就先把 app 外框和骨架畫出來，`header` 的操作先鎖住
 （handler 還沒綁）。等待時間沒變短，但看得出來是在載入而不是壞了。
 
+開站的順序也調過。原本 `session.resume` 排在 Google 登入元件（`gsi/client`，`async defer`）
+載完之後才發出去，但續用 session 只需要一張 token，用不到那支元件。現在 `init()` 一被呼叫
+就把 resume 送出去，跟 GIS 載入平行跑；`start()` 只等 resume 的結果決定要不要跳登入。
+
+再上面一層是 `localStorage` 的開站快取（`faBoot`）：把上次拿到的 stats/list/meta 存起來，
+下次開站先畫舊的、header 顯示「更新中…」，後端回來再換掉（stale-while-revalidate）。
+冷啟動那 8 秒省不掉，但使用者不用盯著骨架等。
+
+這份快取跟 session 綁在一起，`clearSession()` 會一併清掉，所以登出、閒置逾時、或別的分頁
+登出之後，下一個人不會看到前一個人的資料；要先看得到內容，前提是 `loadSession()` 通過
+（12 小時絕對壽命 + 閒置逾時都還沒到）。
+
+代價講清楚：這是在「後端確認 session 之前」就先畫出來。後端唯一可能推翻的情況是 session
+已在別的裝置登出或伺服器端過期——那時 resume 會失敗，畫面退回登入閘門。另外快取裡的角色
+可能已經被管理員改過，所以 `onReady` 第二次呼叫時會用後端那份重畫 header；真正的權限一直
+都是後端說了算，前端的角色只影響畫面。
+
+
 ## 給前端 `api.js` 的重點提醒
 
 - 請求信封：`{ action, token, requestId, payload }`；`token` 是 `session.login` 換回來的
