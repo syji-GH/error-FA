@@ -8,7 +8,10 @@ const SHEET_SCHEMAS = {
     'partNo', 'partName', 'vendor', 'poNo', 'qty', 'unit', 'needByDate',
     'description', 'status', 'assignee', 'assigneeName',
     'lastActivityAt', 'closedAt', 'closedBy', 'resolution',
-    'commentCount', 'attachmentCount'],
+    'commentCount', 'attachmentCount',
+    // 作廢用獨立欄位，不塞進 status：作廢跟「待處理→處理中→已結案」是兩件事，
+    // 混進狀態會讓統計卡與篩選都要跟著長出例外。做法與留言、附件的軟刪除一致。
+    'isVoided', 'voidedAt', 'voidedBy', 'voidReason'],
   Comments: ['commentId', 'caseId', 'parentId', 'createdAt', 'authorEmail', 'authorName',
     'body', 'isEdited', 'editedAt', 'isDeleted'],
   Attachments: ['attId', 'caseId', 'commentId', 'fileName', 'mimeType', 'size',

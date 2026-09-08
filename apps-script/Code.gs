@@ -26,7 +26,7 @@ const SPREADSHEET_ID = 'REPLACE_ME';
 
 // 每次部署前手動 +1（或改成日期字串），doGet 會回傳這個版本號，
 // 一看就知道 /exec 上線的是哪一版，避免部署到錯的 deployment id 卻沒發現。
-const SCRIPT_VERSION = '2026-09-07.7';
+const SCRIPT_VERSION = '2026-09-08.1';
 
 // 案件描述 / 留言內容都是純文字（前端用 white-space:pre-wrap 顯示，自動連結網址），
 // 不接受也不需要 HTML，這裡只做長度上限保護。
@@ -107,6 +107,8 @@ const MUTATING_ACTIONS = {
   'cases.create': true,
   'cases.update': true,
   'cases.setStatus': true,
+  'cases.void': true,
+  'cases.unvoid': true,
   'comments.create': true,
   'comments.update': true,
   'comments.delete': true,
@@ -128,6 +130,8 @@ const ACTIONS = {
   'cases.create': { auth: true, handler: casesCreate },
   'cases.update': { auth: true, handler: casesUpdate },
   'cases.setStatus': { auth: true, handler: casesSetStatus },
+  'cases.void': { auth: true, handler: casesVoid },
+  'cases.unvoid': { auth: true, handler: casesUnvoid },
   'cases.stats': { auth: true, handler: casesStats },
 
   'comments.create': { auth: true, handler: commentsCreate },

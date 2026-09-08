@@ -32,6 +32,7 @@ window.API = (function () {
   // 需要冪等保護的寫入動作
   var MUTATING = {
     'cases.create': 1, 'cases.update': 1, 'cases.setStatus': 1,
+    'cases.void': 1, 'cases.unvoid': 1,
     'comments.create': 1, 'comments.update': 1, 'comments.delete': 1,
     'attachments.upload': 1, 'attachments.delete': 1,
   };
@@ -127,6 +128,8 @@ window.API = (function () {
       });
     },
     setStatus:     function (id, s, note) { return call('cases.setStatus', { caseId: id, status: s, note: note || '' }); },
+    voidCase:      function (id, reason) { return call('cases.void', { caseId: id, reason: reason }); },
+    unvoidCase:    function (id, note)   { return call('cases.unvoid', { caseId: id, note: note || '' }); },
     addComment:    function (data)   { return call('comments.create', data); },
     editComment:   function (id, b)  { return call('comments.update', { commentId: id, body: b }); },
     deleteComment: function (id)     { return call('comments.delete', { commentId: id }); },

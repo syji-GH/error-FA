@@ -23,6 +23,10 @@ function commentsCreate(user, payload) {
 
   const caseRow = getRowById('Cases', 'caseId', caseId);
   if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
+  // 作廢的單是凍結的：留言會讓它看起來還在處理中，跟「這張單不該存在」互相矛盾
+  if (isCaseVoided_(caseRow)) {
+    throw new AppError('BAD_REQUEST', '這張單已作廢，要繼續討論請先復原');
+  }
 
   const commentId = 'C-' + Utilities.getUuid();
   const now = nowIso_();

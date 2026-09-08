@@ -6,7 +6,7 @@
   var view = null;
 
   var state = {
-    filter: { status: '', type: '', q: '', mine: false },
+    filter: { status: '', type: '', q: '', mine: false, voided: false },
     cases: [],
     stats: null,
     members: [],
@@ -250,6 +250,7 @@
       type: state.filter.type,
       q: state.filter.q,
       mine: state.filter.mine,
+      voided: state.filter.voided,
       limit: 100,
       withStats: true,   // 統計跟清單一起回，省一趟往返
     };
@@ -274,9 +275,11 @@
       box.innerHTML = state.cases.length
         ? '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">' +
             state.cases.map(caseCard).join('') + '</div>'
-        : UI.empty('沒有符合條件的異常單',
-            state.filter.q || state.filter.status || state.filter.type
-              ? '換個篩選條件看看' : '點右上角「開新異常單」建立第一筆');
+        : UI.empty(state.filter.voided ? '沒有已作廢的異常單' : '沒有符合條件的異常單',
+            state.filter.voided
+              ? '作廢的單會留在這裡，不會真的被刪掉'
+              : (state.filter.q || state.filter.status || state.filter.type
+                  ? '換個篩選條件看看' : '點右上角「開新異常單」建立第一筆'));
     } catch (err) {
       showError(document.getElementById('caseList'), err);
     }
@@ -315,6 +318,9 @@
         '<button id="btnMine" class="shrink-0 rounded-full px-4 py-1.5 text-[13px] font-bold transition-colors ' +
           (state.filter.mine ? 'bg-ecoco-blue text-white' : 'text-muted hover:text-ink hover:bg-card') +
           '">我開的</button>' +
+        '<button id="btnVoided" class="shrink-0 rounded-full px-4 py-1.5 text-[13px] font-bold transition-colors ' +
+          (state.filter.voided ? 'bg-ink text-white' : 'text-muted hover:text-ink hover:bg-card') +
+          '">已作廢</button>' +
       '</div>' +
       '<div class="flex gap-1 overflow-x-auto scrollbar-hide -mx-1 px-1">' + typeChips + '</div>' +
     '</div>';
@@ -341,6 +347,10 @@
         state.filter.mine = !state.filter.mine;
         return renderList();
       }
+      if (e.target.closest('#btnVoided')) {
+        state.filter.voided = !state.filter.voided;
+        return renderList();
+      }
     });
   }
 
@@ -362,6 +372,14 @@
     }
   }
 
+  /** Sheets 讀回來的布林欄位可能是 true 也可能是字串 'TRUE'，兩種都要吃 */
+  function isVoided(c) {
+    return !!c && (c.isVoided === true || String(c.isVoided).toUpperCase() === 'TRUE');
+  }
+
+  var VOID_BADGE = '<span class="inline-flex items-center rounded-full border border-line bg-card ' +
+    'px-2.5 py-0.5 text-[11px] font-black tracking-wide text-muted">已作廢</span>';
+
   /** 標題是選填的，空白時退而用料號當標示（再不行才用案號） */
   function caseLabel(c) {
     return c.title || c.partNo || c.caseId;
@@ -374,9 +392,10 @@
     }).join('');
 
     return '<a href="#/case/' + esc(c.caseId) + '" class="fa-rise block bg-white rounded-2xl border border-line ' +
-      'shadow-sm hover:shadow-md transition-all duration-200 p-5">' +
+      'shadow-sm hover:shadow-md transition-all duration-200 p-5' +
+      (isVoided(c) ? ' opacity-60' : '') + '">' +
       '<div class="flex items-center gap-2 flex-wrap">' +
-        UI.statusBadge(c.status) + UI.typeBadge(c.type) +
+        (isVoided(c) ? VOID_BADGE : '') + UI.statusBadge(c.status) + UI.typeBadge(c.type) +
         '<span class="ml-auto text-[10px] font-bold tracking-widest text-muted">' + esc(c.caseId) + '</span>' +
       '</div>' +
       '<h3 class="mt-3 text-base font-black tracking-tight text-ink line-clamp-2">' + esc(caseLabel(c)) + '</h3>' +
@@ -415,6 +434,7 @@
 
     var c = data.case;
     var perm = data.permissions || {};
+    var voided = isVoided(c);
     var atts = data.attachments || [];
     var caseAtts = atts.filter(function (a) { return !a.commentId; });
 
@@ -426,13 +446,22 @@
           // ── 案件本體
           '<div class="bg-white rounded-2xl border border-line shadow-sm p-6">' +
             '<div class="flex items-center gap-2 flex-wrap">' +
-              UI.statusBadge(c.status) + UI.typeBadge(c.type) +
+              (voided ? VOID_BADGE : '') + UI.statusBadge(c.status) + UI.typeBadge(c.type) +
               '<span class="ml-auto text-[10px] font-bold tracking-widest text-muted">' + esc(c.caseId) + '</span>' +
-              (perm.canEditContent || perm.canEditCase
+              (!voided && (perm.canEditContent || perm.canEditCase)
                 ? '<button id="btnEditCase" class="text-xs font-bold text-muted hover:text-ink ' +
                   'px-2.5 py-1 rounded-full hover:bg-card transition-colors">編輯</button>'
                 : '') +
+              (perm.canVoid
+                ? '<button id="btnVoidCase" class="text-xs font-bold text-muted hover:text-red-600 ' +
+                  'px-2.5 py-1 rounded-full hover:bg-red-50 transition-colors">作廢</button>'
+                : '') +
+              (perm.canUnvoid
+                ? '<button id="btnUnvoidCase" class="text-xs font-bold text-muted hover:text-ink ' +
+                  'px-2.5 py-1 rounded-full hover:bg-card transition-colors">復原</button>'
+                : '') +
             '</div>' +
+            voidBanner(c) +
             '<h1 class="mt-3 text-xl font-black tracking-tight text-ink">' + esc(caseLabel(c)) + '</h1>' +
             '<div class="mt-3 flex items-center gap-2 text-xs font-medium text-muted">' +
               UI.avatar(c.createdByName, c.createdBy, 'sm') +
@@ -446,14 +475,14 @@
             attachmentGrid(caseAtts) +
           '</div>' +
 
-          // ── 狀態操作
-          statusPanel(c, perm) +
+          // ── 狀態操作（作廢的單是凍結的，先復原才能繼續處理）
+          (voided ? '' : statusPanel(c, perm)) +
 
-          // ── 留言串
+          // ── 留言串（既有留言仍然看得到，歷程才完整）
           '<div id="thread">' + commentThread(data.comments || [], atts) + '</div>' +
 
           // ── 留言輸入
-          '<div id="composer" class="bg-white rounded-2xl border border-line shadow-sm p-5"></div>' +
+          (voided ? '' : '<div id="composer" class="bg-white rounded-2xl border border-line shadow-sm p-5"></div>') +
         '</div>' +
 
         // ── 右側資訊欄
@@ -463,11 +492,104 @@
         '</div>' +
       '</div>';
 
-    mountComposer(c.caseId);
-    bindStatusPanel(c, perm);
+    if (!voided) {
+      mountComposer(c.caseId);
+      bindStatusPanel(c, perm);
+    }
 
     var editBtn = document.getElementById('btnEditCase');
     if (editBtn) editBtn.addEventListener('click', function () { openEditCase(data); });
+
+    var voidBtn = document.getElementById('btnVoidCase');
+    if (voidBtn) voidBtn.addEventListener('click', function () { askVoid(c); });
+
+    var unvoidBtn = document.getElementById('btnUnvoidCase');
+    if (unvoidBtn) unvoidBtn.addEventListener('click', function () { askUnvoid(c); });
+  }
+
+  /** 作廢橫幅。原因是後端必填的，所以這裡一定有東西可以顯示。 */
+  function voidBanner(c) {
+    if (!isVoided(c)) return '';
+    var who = c.voidedBy ? esc(String(c.voidedBy).split('@')[0]) : '';
+    var when = c.voidedAt ? esc(UI.fmtDate(c.voidedAt)) : '';
+    var meta = who || when ? '　' + who + (who && when ? ' · ' : '') + when : '';
+    return '<div class="mt-4 rounded-xl border border-line bg-card px-4 py-3">' +
+      '<p class="text-[10px] font-bold tracking-widest uppercase text-muted">已作廢' + meta + '</p>' +
+      (c.voidReason
+        ? '<p class="mt-1.5 text-sm font-medium text-ink2 leading-relaxed">' + UI.linkify(c.voidReason) + '</p>'
+        : '') +
+      '<p class="mt-2 text-xs font-medium text-muted">' +
+        '資料與歷程都保留著，要繼續處理請洽廠務部復原。</p></div>';
+  }
+
+  function askVoid(c) {
+    var m = UI.modal({
+      title: '作廢 ' + c.caseId,
+      width: 'sm:max-w-md',
+      body:
+        '<p class="text-sm font-medium text-ink2 leading-relaxed mb-3">' +
+          '作廢之後這張單不會出現在清單裡，也不能再留言或改狀態，但資料和歷程都會留著，' +
+          '在「已作廢」篩選裡找得回來。</p>' +
+        '<label class="block text-[10px] font-bold tracking-widest uppercase text-muted mb-2">' +
+          '作廢原因（必填）</label>' +
+        '<textarea id="vdReason" rows="3" class="' + UI.input + ' resize-none" ' +
+          'placeholder="例：開重複了，同一批料已經有 FA-2026-0012"></textarea>',
+    });
+    m.footer.innerHTML =
+      '<button id="vdCancel" class="' + UI.btn.ghost + '">取消</button>' +
+      '<button id="vdOk" class="' + UI.btn.danger + '">確認作廢</button>';
+
+    m.footer.querySelector('#vdCancel').addEventListener('click', m.close);
+    m.footer.querySelector('#vdOk').addEventListener('click', async function () {
+      var reason = m.body.querySelector('#vdReason').value.trim();
+      if (!reason) {
+        UI.toast('請填寫作廢原因', 'error');
+        return;
+      }
+      var btn = this;
+      btn.disabled = true; btn.textContent = '處理中…';
+      try {
+        await API.voidCase(c.caseId, reason);
+        m.close();
+        UI.toast('已作廢 ' + c.caseId, 'ok');
+        renderDetail(c.caseId);
+      } catch (err) {
+        btn.disabled = false; btn.textContent = '確認作廢';
+        UI.toast(err.message, 'error');
+      }
+    });
+  }
+
+  function askUnvoid(c) {
+    var m = UI.modal({
+      title: '復原 ' + c.caseId,
+      width: 'sm:max-w-md',
+      body:
+        '<p class="text-sm font-medium text-ink2 leading-relaxed mb-3">' +
+          '復原後這張單會回到「' + esc(c.status) + '」，重新出現在清單裡。</p>' +
+        '<label class="block text-[10px] font-bold tracking-widest uppercase text-muted mb-2">' +
+          '說明（選填）</label>' +
+        '<textarea id="uvNote" rows="3" class="' + UI.input + ' resize-none" ' +
+          'placeholder="例：確認不是重複開單，繼續處理"></textarea>',
+    });
+    m.footer.innerHTML =
+      '<button id="uvCancel" class="' + UI.btn.ghost + '">取消</button>' +
+      '<button id="uvOk" class="' + UI.btn.primary + '">確認復原</button>';
+
+    m.footer.querySelector('#uvCancel').addEventListener('click', m.close);
+    m.footer.querySelector('#uvOk').addEventListener('click', async function () {
+      var btn = this;
+      btn.disabled = true; btn.textContent = '處理中…';
+      try {
+        await API.unvoidCase(c.caseId, m.body.querySelector('#uvNote').value.trim());
+        m.close();
+        UI.toast('已復原 ' + c.caseId, 'ok');
+        renderDetail(c.caseId);
+      } catch (err) {
+        btn.disabled = false; btn.textContent = '確認復原';
+        UI.toast(err.message, 'error');
+      }
+    });
   }
 
   /** attachmentId → 附件 DTO。含已移除的，歷程紀錄要靠它把「當時那張圖」畫出來。 */
@@ -579,6 +701,8 @@
     resolution: '處理結果',
     'attachment.add': '新增附件',
     'attachment.remove': '移除附件',
+    void: '作廢',
+    unvoid: '復原',
   };
 
   var HIST_INLINE_MAX = 40;   // 超過這個長度的舊值改用可展開的方式顯示

@@ -104,7 +104,7 @@ function assertKnownFields_(headers, obj, sheetName) {
 const TEXT_COLUMNS_ = {
   Cases: ['caseId', 'createdBy', 'createdByName', 'dept', 'type', 'title', 'partNo',
     'partName', 'vendor', 'poNo', 'unit', 'description', 'status', 'assignee',
-    'assigneeName', 'closedBy', 'resolution'],
+    'assigneeName', 'closedBy', 'resolution', 'voidedBy', 'voidReason'],
   Comments: ['commentId', 'caseId', 'parentId', 'authorEmail', 'authorName', 'body'],
   Attachments: ['attId', 'caseId', 'commentId', 'fileName', 'mimeType', 'driveFileId',
     'viewUrl', 'thumbUrl', 'uploadedBy', 'deletedBy'],

@@ -319,6 +319,28 @@ function canSetStatus(user, caseRow) {
 }
 
 /**
+ * 作廢／復原權限。作廢是「這張單不該存在」，不是工作流的一步，所以規則跟狀態變更不同：
+ *
+ *  - 開單人只能作廢自己的單，而且限「待處理」——廠務一旦接手，就不該由開單人單方面撤掉
+ *  - 廠務／admin 可以作廢任何還沒結案的單
+ *  - 已結案的一律不能作廢：結案紀錄不該被繞過，真要作廢請先把狀態改回去
+ */
+function canVoidCase(user, caseRow) {
+  if (!user || !caseRow) return false;
+  if (isCaseVoided_(caseRow)) return false;
+  if (caseRow.status === '已結案') return false;
+  if (user.role === 'admin' || user.role === 'facility') return true;
+  return sameEmail_(user.email, caseRow.createdBy) && caseRow.status === '待處理';
+}
+
+/** 復原只有廠務／admin：作廢是刻意的動作，要撤回得由能為它負責的人來。 */
+function canUnvoidCase(user, caseRow) {
+  if (!user || !caseRow) return false;
+  if (!isCaseVoided_(caseRow)) return false;
+  return user.role === 'admin' || user.role === 'facility';
+}
+
+/**
  * 供每日排程呼叫（見 Setup.gs 的 ensureDailyPurgeTrigger）：
  * 清掉 Script Properties 裡已經過期的 session，避免塞滿 500KB 上限。
  */

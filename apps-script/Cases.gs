@@ -10,9 +10,20 @@ const CASE_TYPES = ['需追加採購', '廠商送錯', '料號變更', '物料�
 // 單一料號，硬性要求只會讓開單的人隨便填一個，反而把資料弄髒。
 const TYPE_WITHOUT_PART_NO = '其他';
 
+/** Cases 的 isVoided 可能是布林值也可能是字串 'TRUE'，跟其他軟刪除欄位一樣兩種都要吃。 */
+function isCaseVoided_(row) {
+  return !!row && (row.isVoided === true || String(row.isVoided).toUpperCase() === 'TRUE');
+}
+
 function casesList(user, payload) {
   payload = payload || {};
   let rows = readAll('Cases');
+
+  // 作廢的單預設不出現。要看的話帶 voided:true，而且**只**回作廢的那些——
+  // 跟正常的單混在一起看不出差別，反而容易誤判。
+  rows = payload.voided
+    ? rows.filter(isCaseVoided_)
+    : rows.filter(function (r) { return !isCaseVoided_(r); });
 
   if (payload.status) rows = rows.filter(function (r) { return r.status === payload.status; });
   if (payload.type) rows = rows.filter(function (r) { return r.type === payload.type; });
@@ -135,7 +146,9 @@ function casesGet(user, payload) {
     permissions: {
       canSetStatus: canSetStatus(user, caseRow),
       canEditCase: canEditCase(user, caseRow),
-      canEditContent: canEditCaseContent(user, caseRow)
+      canEditContent: canEditCaseContent(user, caseRow),
+      canVoid: canVoidCase(user, caseRow),
+      canUnvoid: canUnvoidCase(user, caseRow)
     }
   };
 }
@@ -382,6 +395,9 @@ function casesUpdate(user, payload) {
   return withWriteLock_(function () {
     const caseRow = getRowById('Cases', 'caseId', caseId);
     if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
+    if (isCaseVoided_(caseRow)) {
+      throw new AppError('BAD_REQUEST', '這張單已作廢，要繼續處理請先復原');
+    }
 
     // 兩層權限分開檢：廠務部可以接手處理別人的單，
     // 但不能改別人回報的事實（含附件），要補充請用留言。
@@ -500,6 +516,9 @@ function casesSetStatus(user, payload) {
   return withWriteLock_(function () {
     const caseRow = getRowById('Cases', 'caseId', caseId);
     if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
+    if (isCaseVoided_(caseRow)) {
+      throw new AppError('BAD_REQUEST', '這張單已作廢，要繼續處理請先復原');
+    }
     if (!canSetStatus(user, caseRow)) {
       throw new AppError('FORBIDDEN', '沒有權限變更這張案件的狀態');
     }
@@ -538,8 +557,89 @@ function casesSetStatus(user, payload) {
   });
 }
 
+/**
+ * cases.void / cases.unvoid：作廢與復原。
+ *
+ * 作廢不是狀態，是獨立欄位——「這張單不該存在」跟「待處理→處理中→已結案」是兩件事，
+ * 混進 status 會讓統計卡、篩選、結案規則都要跟著長出例外。做法與留言、附件的軟刪除一致：
+ * 資料整列留著，歷程也留著，只是預設不出現在清單裡。真刪一列會讓「這個料號到底出過
+ * 什麼事」直接斷掉，那正是這個看板要回答的問題。
+ */
+function casesVoid(user, payload) {
+  payload = payload || {};
+  const caseId = payload.caseId;
+  const reason = payload.reason ? String(payload.reason).trim() : '';
+
+  if (!caseId) throw new AppError('BAD_REQUEST', '缺少 caseId');
+  // 原因必填：作廢的單之後還看得到，沒寫原因的話沒人知道當初為什麼撤掉
+  if (!reason) throw new AppError('BAD_REQUEST', '請填寫作廢原因');
+  if (reason.length > MAX_TEXT_LEN) {
+    throw new AppError('BAD_REQUEST', '作廢原因過長（上限 ' + MAX_TEXT_LEN + ' 字）');
+  }
+
+  return withWriteLock_(function () {
+    const caseRow = getRowById('Cases', 'caseId', caseId);
+    if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
+    if (isCaseVoided_(caseRow)) throw new AppError('BAD_REQUEST', '這張單已經作廢了');
+    if (caseRow.status === '已結案') {
+      throw new AppError('FORBIDDEN', '已結案的單不能作廢，要作廢請先把狀態改回去');
+    }
+    if (!canVoidCase(user, caseRow)) {
+      throw new AppError('FORBIDDEN', '沒有權限作廢這張單（開單人只能作廢自己還在「待處理」的單）');
+    }
+
+    const now = nowIso_();
+    const updated = updateRowById('Cases', 'caseId', caseId, {
+      isVoided: true,
+      voidedAt: now,
+      voidedBy: user.email,
+      voidReason: reason,
+      lastActivityAt: now
+    });
+    appendRow('History', makeHistory_(caseId, user, 'void', { to: '已作廢', note: reason, at: now }));
+
+    return { case: updated };
+  });
+}
+
+function casesUnvoid(user, payload) {
+  payload = payload || {};
+  const caseId = payload.caseId;
+  const note = payload.note ? String(payload.note).trim() : '';
+
+  if (!caseId) throw new AppError('BAD_REQUEST', '缺少 caseId');
+  if (note.length > MAX_TEXT_LEN) {
+    throw new AppError('BAD_REQUEST', '說明過長（上限 ' + MAX_TEXT_LEN + ' 字）');
+  }
+
+  return withWriteLock_(function () {
+    const caseRow = getRowById('Cases', 'caseId', caseId);
+    if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
+    if (!isCaseVoided_(caseRow)) throw new AppError('BAD_REQUEST', '這張單沒有被作廢');
+    if (!canUnvoidCase(user, caseRow)) {
+      throw new AppError('FORBIDDEN', '只有廠務部或管理員可以復原已作廢的單');
+    }
+
+    const now = nowIso_();
+    // 作廢原因一併清掉：留著會跟「目前沒被作廢」的狀態互相矛盾，歷程裡查得到就夠了
+    const updated = updateRowById('Cases', 'caseId', caseId, {
+      isVoided: false,
+      voidedAt: '',
+      voidedBy: '',
+      voidReason: '',
+      lastActivityAt: now
+    });
+    appendRow('History', makeHistory_(caseId, user, 'unvoid', {
+      from: '已作廢', to: caseRow.status, note: note, at: now
+    }));
+
+    return { case: updated };
+  });
+}
+
 function casesStats(user, payload) {
-  const rows = readAll('Cases');
+  // 作廢的單不計入統計：一張作廢的「待處理」不該讓待處理的數字看起來還有事情要做
+  const rows = readAll('Cases').filter(function (r) { return !isCaseVoided_(r); });
   const out = { 待處理: 0, 處理中: 0, 暫緩: 0, 已結案: 0, total: rows.length };
   rows.forEach(function (r) {
     if (Object.prototype.hasOwnProperty.call(out, r.status)) out[r.status]++;
