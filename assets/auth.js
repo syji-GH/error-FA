@@ -166,8 +166,8 @@ window.Auth = (function () {
     if (!sessionToken) return;
     var s = readStore();
     // localStorage 是跨分頁共用的：別的分頁登出了，這個分頁也要跟著退出
-    if (!s || !s.t) { forceLogout('登入已在其他分頁結束，請重新登入'); return; }
-    if (idleExpired(s)) forceLogout('太久沒有操作，已自動登出，請重新登入');
+    if (!s || !s.t) { forceLogout('你已在其他分頁登出，請按下方按鈕重新登入'); return; }
+    if (idleExpired(s)) forceLogout('太久沒有操作，已自動登出。請按下方按鈕重新登入');
   }
 
   /** 閒置逾時／其他分頁登出：本機清乾淨，順手把後端那張 token 也作廢，不等結果 */
@@ -178,13 +178,15 @@ window.Auth = (function () {
     if (t) { try { window.API.logout(t).catch(function () {}); } catch (e) {} }
     location.hash = '';
     showGate();
-    gateError(msg);
+    gateNotice(msg);
   }
 
   /* ── GIS callback ─────────────────────────────────────── */
 
   async function handleCredential(resp) {
     if (!resp || !resp.credential) return;
+    // 不管是按按鈕還是 Google 自動登入，拿到帳號的當下就要讓人看到「處理中」
+    if (!reauthPending) gateState('verifying');
     try {
       // 重新驗證的情境不需要 boot 包，只有真正開站才要
       var wantBoot = !reauthPending;
@@ -200,6 +202,8 @@ window.Auth = (function () {
       if (reauthPending) { reauthPending.resolve(sessionToken); reauthPending = null; return; }
 
       enterApp();
+      // 明確告訴使用者「成功了、登入的是誰」——換帳號登入時也能馬上發現選錯人
+      if (window.UI) window.UI.toast('已登入：' + (user.name || user.email), 'ok');
     } catch (err) {
       clearSession();
       if (reauthPending) { reauthPending.resolve(null); reauthPending = null; }
@@ -233,7 +237,7 @@ window.Auth = (function () {
       reauthPending = null;
       clearSession();
       showGate();
-      gateError('登入已逾期，請重新登入');
+      gateNotice('登入已逾期，請按下方按鈕重新登入');
     }, 15000);
 
     box.promise.then(function () { clearTimeout(timer); });
@@ -251,9 +255,11 @@ window.Auth = (function () {
     var t = sessionToken;
     clearSession();
     try { google.accounts.id.disableAutoSelect(); } catch (e) {}
-    if (t) { try { await window.API.logout(t); } catch (e) {} }
     location.hash = '';
     showGate();
+    gateNotice('已登出。要再使用請按下方按鈕登入');
+    // 後端作廢 token 不用等：畫面先回登入卡，不要讓人以為登出卡住了
+    if (t) { try { window.API.logout(t).catch(function () {}); } catch (e) {} }
   }
 
   /* ── 畫面切換 ─────────────────────────────────────────── */
@@ -288,10 +294,61 @@ window.Auth = (function () {
   function endBooting() {
     document.getElementById('app').classList.remove('is-booting');
   }
+  /**
+   * 登入卡的狀態。同一時間只會是其中一種，讓人一眼看得出「現在在幹嘛、要不要我動手」：
+   *
+   *   loading    Google 登入元件還在載入          → 轉圈，不顯示按鈕
+   *   ready      等使用者自己按                   → 顯示按鈕＋一句「請按下方按鈕」
+   *   verifying  已經選好帳號，後端正在驗證        → 轉圈，按鈕藏起來（避免又按一次）
+   *   notice     被登出了（閒置、別的分頁登出）    → 說明原因＋按鈕
+   *   error      登入失敗                          → 紅字＋按鈕
+   *
+   * 之前的問題：選完帳號到後端回來可能要 8 秒以上（Apps Script 冷啟動），這段時間
+   * 畫面跟選帳號前一模一樣，使用者分不出是成功、失敗還是要再按一次。
+   */
+  var gisReady = false;
+  var slowTimer = null;
+  var gateCur = { state: 'loading', msg: '' };
+
+  function gateState(state, msg) {
+    gateCur = { state: state, msg: msg || '' };
+    var box = document.getElementById('gateStatus');
+    var btn = document.getElementById('gsiButton');
+    if (!box || !btn) return;
+    clearTimeout(slowTimer);
+
+    // Google 元件沒載入完之前沒有按鈕可以按，ready/notice/error 都只能先顯示文字
+    var showButton = gisReady && (state === 'ready' || state === 'notice' || state === 'error');
+    btn.classList.toggle('hidden', !showButton);
+
+    var spin = state === 'loading' || state === 'verifying';
+    var color = state === 'error' ? 'text-red-600' : state === 'notice' ? 'text-ink' : 'text-ink2';
+    var text = msg || {
+      loading: '正在準備登入…',
+      ready: '請按下方按鈕，選擇你的公司帳號',
+      verifying: '登入中，正在確認你的帳號…',
+    }[state] || '';
+
+    box.className = 'min-h-[44px] flex items-center justify-center gap-2.5 text-sm font-bold leading-relaxed ' + color;
+    box.innerHTML = (spin ? '<span class="fa-spin"></span>' : '') + '<span></span>';
+    box.lastChild.textContent = text;
+
+    // 冷啟動可能要十秒，超過幾秒就明講，不然看起來像當掉
+    if (state === 'verifying') {
+      slowTimer = setTimeout(function () {
+        if (box.lastChild) box.lastChild.textContent = '伺服器剛啟動，第一次登入約需 10 秒，請稍候…';
+      }, 5000);
+    }
+  }
+
+  /** 舊的呼叫點都走這裡：有訊息就是 error，沒訊息就回到「請按按鈕」 */
   function gateError(msg) {
-    var el = document.getElementById('gateError');
-    el.textContent = msg || '';
-    el.classList.toggle('hidden', !msg);
+    gateState(msg ? 'error' : (gisReady ? 'ready' : 'loading'), msg);
+  }
+
+  /** 不是出錯、只是需要重新登入（閒置逾時、別的分頁登出）——用中性色，不要嚇人 */
+  function gateNotice(msg) {
+    gateState('notice', msg);
   }
 
   /* ── 啟動 ─────────────────────────────────────────────── */
@@ -301,8 +358,7 @@ window.Auth = (function () {
 
     if (!window.API.isConfigured()) {
       document.getElementById('gateConfigWarn').classList.remove('hidden');
-      document.getElementById('gsiButton').innerHTML =
-        '<p class="text-sm font-medium text-muted">尚未完成設定</p>';
+      gateState('error', '系統尚未完成設定，暫時無法登入');
       return;
     }
 
@@ -316,7 +372,7 @@ window.Auth = (function () {
     (function waitForGis() {
       if (!window.google || !google.accounts || !google.accounts.id) {
         if (++tries > 100) {
-          gateError('無法載入 Google 登入元件，請檢查網路或防火牆設定');
+          gateError('無法載入 Google 登入元件，請檢查網路後重新整理頁面');
           return;
         }
         return setTimeout(waitForGis, 100);
@@ -382,6 +438,9 @@ window.Auth = (function () {
       endBooting();
       clearSession();
       showGate();
+      // 講清楚為什麼又回到登入畫面，不然看起來像莫名其妙被踢出來
+      if (e.code === 'UNAUTHENTICATED') gateNotice('上次的登入已過期，請按下方按鈕重新登入');
+      else gateError(e.message || '連不上伺服器，請稍後再試');
       return false;
     }
   }
@@ -400,6 +459,11 @@ window.Auth = (function () {
       type: 'standard', theme: 'filled_black', size: 'large',
       text: 'signin_with', shape: 'pill', locale: 'zh_TW', width: 280,
     });
+
+    // 按鈕畫好了才能叫人按。已經顯示的說明（例如「已自動登出」）保留，只是把按鈕亮出來
+    gisReady = true;
+    if (gateCur.state === 'loading') gateState('ready');
+    else if (gateCur.state !== 'verifying') gateState(gateCur.state, gateCur.msg);
 
     // resume 在 init() 就發出去了，這裡只等它的結果決定要不要打擾使用者
     if (await resumeDone) return;

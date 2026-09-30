@@ -65,17 +65,17 @@
       </p>
     </div>
 
+    <!-- 登入卡：同一時間只會有一種狀態（載入中／請按按鈕／登入中／出錯），見 auth.js 的 gateState() -->
     <div class="bg-white rounded-2xl border border-line shadow-sm p-6">
-      <p class="text-[10px] font-bold tracking-widest uppercase text-muted mb-4">
-        請使用公司帳號登入
-      </p>
-      <div id="gsiButton" class="flex justify-center min-h-[44px]"></div>
+      <div id="gateStatus" role="status" aria-live="polite"
+        class="min-h-[44px] flex items-center justify-center gap-2.5 text-sm font-bold text-ink2 leading-relaxed">
+        <span class="fa-spin"></span><span>正在準備登入…</span>
+      </div>
+      <div id="gsiButton" class="hidden mt-4 flex justify-center min-h-[44px]"></div>
       <p class="mt-4 text-xs font-medium text-muted">
-        僅限 <span class="font-bold text-ink">@ecoco.xyz</span> 網域
+        僅限 <span class="font-bold text-ink">@ecoco.xyz</span> 公司帳號
       </p>
     </div>
-
-    <p id="gateError" class="mt-5 text-sm font-bold text-red-600 hidden"></p>
 
     <div id="gateConfigWarn" class="mt-5 hidden text-left bg-white border border-line rounded-2xl p-4">
       <p class="text-[10px] font-bold tracking-widest uppercase text-red-600 mb-2">尚未設定</p>

@@ -28,6 +28,14 @@ body { -webkit-tap-highlight-color: transparent; }
 #app.is-booting #btnNew,
 #app.is-booting #btnUser { opacity: .45; pointer-events: none; }
 
+/* 登入卡的「處理中」轉圈 */
+@keyframes fa-spin { to { transform: rotate(360deg); } }
+.fa-spin {
+  width: 16px; height: 16px; flex-shrink: 0; border-radius: 9999px;
+  border: 2px solid #E5E7EB; border-top-color: #FF5000;
+  animation: fa-spin .8s linear infinite;
+}
+
 /* Google 登入按鈕容器置中 */
 #gsiButton > div { margin: 0 auto; }
 
