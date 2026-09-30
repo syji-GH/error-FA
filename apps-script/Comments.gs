@@ -43,15 +43,16 @@ function commentsCreate(user, payload) {
     editedAt: '',
     isDeleted: false
   };
-  appendRow('Comments', commentRow);
-
-  // 附件先傳完再進鎖：Drive 往返可能好幾秒，不該佔著全域鎖擋住其他人
+  // 附件先存、留言後寫，跟 casesCreate 同一個理由：附件失敗時留言還沒寫進去，
+  // 使用者重送不會多出一則重複的留言。Drive 上傳在鎖外做，不佔著全域鎖。
   let savedCount = 0;
   if (hasAttachments) {
     savedCount = saveAttachments(caseId, commentId, payload.attachments, user).length;
   }
 
   withWriteLock_(function () {
+    appendRow('Comments', commentRow);
+
     // 計數一定要在鎖裡重讀再加，不能拿進鎖之前那份 caseRow 算——兩個人同時留言的話
     // 後進來的會用到過期的計數，一則留言就這樣消失在數字裡。
     // 而且 updateRowById 是整列讀出來再整列寫回去，沒有鎖的話連別人剛改的狀態都會被蓋掉。

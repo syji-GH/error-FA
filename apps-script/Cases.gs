@@ -309,8 +309,18 @@ function casesCreate(user, payload) {
   if (String(description).length > MAX_TEXT_LEN) {
     throw new AppError('BAD_REQUEST', '描述內容過長（上限 ' + MAX_TEXT_LEN + ' 字）');
   }
+  const needByDate = payload.needByDate ? String(payload.needByDate).trim() : '';
+  assertDateOrEmpty_(needByDate);
 
   const caseId = nextCaseId_();
+
+  // 附件先存、案件後寫。反過來的話附件一失敗，案件已經開好了、使用者卻看到錯誤，
+  // 重送一次就變成兩張一樣的單。現在附件失敗就什麼都沒寫（saveAttachments 會把
+  // 已上傳的檔案丟回垃圾桶），只是空掉一個案號——空號比重複的單好處理得多。
+  const saved = Array.isArray(payload.attachments) && payload.attachments.length > 0
+    ? saveAttachments(caseId, '', payload.attachments, user)
+    : [];
+
   const now = nowIso_();
 
   const caseRow = {
@@ -327,7 +337,7 @@ function casesCreate(user, payload) {
     poNo: payload.poNo || '',
     qty: payload.qty || '',
     unit: payload.unit || '',
-    needByDate: payload.needByDate || '',
+    needByDate: needByDate,
     description: description,
     status: '待處理',
     assignee: '',
@@ -337,26 +347,15 @@ function casesCreate(user, payload) {
     closedBy: '',
     resolution: '',
     commentCount: 0,
-    attachmentCount: 0
+    // 案件這一列是在附件都存好之後才寫進去的，這段期間別人不可能在它底下留言附檔，
+    // 所以直接寫數量就是對的
+    attachmentCount: saved.length
   };
 
-  appendRow('Cases', caseRow);
-
-  appendRow('History', makeHistory_(caseId, user, 'create', { to: '待處理', at: now }));
-
-  if (Array.isArray(payload.attachments) && payload.attachments.length > 0) {
-    const saved = saveAttachments(caseId, '', payload.attachments, user);
-    if (saved.length > 0) {
-      // 用「重讀再加」而不是直接寫 saved.length：上傳 Drive 的這幾秒內，
-      // 別人可能已經在這張新單底下留言附檔，直接覆寫會把那些數量吃掉
-      withWriteLock_(function () {
-        invalidateSheetCache_('Cases');
-        const fresh = getRowById('Cases', 'caseId', caseId) || caseRow;
-        caseRow.attachmentCount = Number(fresh.attachmentCount || 0) + saved.length;
-        updateRowById('Cases', 'caseId', caseId, { attachmentCount: caseRow.attachmentCount });
-      });
-    }
-  }
+  withWriteLock_(function () {
+    appendRow('Cases', caseRow);
+    appendRow('History', makeHistory_(caseId, user, 'create', { to: '待處理', at: now }));
+  });
 
   try {
     notifyNewCase(caseRow, user);
@@ -385,6 +384,13 @@ const CASE_EDITABLE_FIELDS = CASE_CONTENT_FIELDS.concat(CASE_HANDLING_FIELDS);
 /** 見 Auth.gs 的 findMemberRow_：重複 email 的處理集中在那裡，不要各自 find 一次。 */
 function findMemberByEmail_(email) {
   return findMemberRow_(email);
+}
+
+/** 需求日只收 yyyy-MM-dd 或空白（前端 <input type=date> 送出的就是這個格式）。 */
+function assertDateOrEmpty_(v) {
+  if (v && !/^\d{4}-\d{2}-\d{2}$/.test(String(v))) {
+    throw new AppError('BAD_REQUEST', '需求日格式不正確');
+  }
 }
 
 /**
@@ -458,6 +464,7 @@ function casesUpdate(user, payload) {
   if (note.length > MAX_TEXT_LEN) {
     throw new AppError('BAD_REQUEST', '修改原因過長（上限 ' + MAX_TEXT_LEN + ' 字）');
   }
+  if (patch.needByDate !== undefined) assertDateOrEmpty_(patch.needByDate);
 
   return withWriteLock_(function () {
     const caseRow = getRowById('Cases', 'caseId', caseId);

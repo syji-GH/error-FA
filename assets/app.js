@@ -760,12 +760,23 @@
 
   function askStatusChange(c, status) {
     var closing = status === '已結案';
+    // 處理結果還沒填的話，結案說明就會直接變成處理結果（後端會補上），所以一定要寫；
+    // 已經填過就把它秀出來，說明變選填——不用把同一件事再寫一次
+    var existing = String(c.resolution || '').trim();
+    var noteRequired = closing && !existing;
     var m = UI.modal({
       title: '變更狀態為「' + status + '」',
       width: 'sm:max-w-md',
       body:
+        (closing && existing
+          ? '<div class="bg-card rounded-xl px-4 py-3 mb-4">' +
+              '<p class="text-[10px] font-bold tracking-widest uppercase text-muted mb-1">處理結果</p>' +
+              '<p class="text-sm font-medium text-ink2 leading-relaxed prose-plain">' + esc(existing) + '</p>' +
+              '<p class="mt-2 text-xs font-medium text-muted">要修改請先取消，按「編輯」改處理結果</p>' +
+            '</div>'
+          : '') +
         '<label class="block text-[10px] font-bold tracking-widest uppercase text-muted mb-2">' +
-          (closing ? '結案說明（必填）' : '說明（選填）') + '</label>' +
+          (noteRequired ? '處理結果（必填）' : closing ? '結案補充（選填）' : '說明（選填）') + '</label>' +
         '<textarea id="stNote" rows="4" class="' + UI.input + ' resize-none" ' +
           'placeholder="' + (closing ? '例：已請廠商換貨，8/20 到料，數量已補齊' : '例：先暫緩，等業務確認客戶需求') +
           '"></textarea>',
@@ -777,8 +788,8 @@
     m.footer.querySelector('#stCancel').addEventListener('click', m.close);
     m.footer.querySelector('#stOk').addEventListener('click', async function () {
       var note = m.body.querySelector('#stNote').value.trim();
-      if (closing && !note) {
-        UI.toast('結案必須填寫說明', 'error');
+      if (noteRequired && !note) {
+        UI.toast('結案必須填寫處理結果', 'error');
         return;
       }
       var btn = this;
@@ -1133,6 +1144,7 @@
             '<div><label class="' + lbl + '">採購單號</label><input id="fPoNo" class="' + UI.input + '"></div>' +
             '<div><label class="' + lbl + '">數量</label><input id="fQty" type="number" class="' + UI.input + '"></div>' +
             '<div><label class="' + lbl + '">單位</label><input id="fUnit" class="' + UI.input + '" placeholder="PCS / KG / 箱"></div>' +
+            '<div><label class="' + lbl + '">需求日</label><input id="fNeedBy" type="date" class="' + UI.input + '"></div>' +
           '</div>' +
           '<div>' +
             '<label class="' + lbl + '">狀況說明 <span class="text-ecoco-orange">*</span></label>' +
@@ -1175,7 +1187,8 @@
         localStorage.setItem(DRAFT, JSON.stringify({
           type: typeSel.get(), title: $('fTitle').value, partNo: $('fPartNo').value,
           partName: $('fPartName').value, vendor: $('fVendor').value, poNo: $('fPoNo').value,
-          qty: $('fQty').value, unit: $('fUnit').value, desc: $('fDesc').value,
+          qty: $('fQty').value, unit: $('fUnit').value, needBy: $('fNeedBy').value,
+          desc: $('fDesc').value,
         }));
       } catch (e) {}
     }
@@ -1185,7 +1198,8 @@
         $('fTitle').value = d.title || ''; $('fPartNo').value = d.partNo || '';
         $('fPartName').value = d.partName || ''; $('fVendor').value = d.vendor || '';
         $('fPoNo').value = d.poNo || ''; $('fQty').value = d.qty || '';
-        $('fUnit').value = d.unit || ''; $('fDesc').value = d.desc || '';
+        $('fUnit').value = d.unit || ''; $('fNeedBy').value = d.needBy || '';
+        $('fDesc').value = d.desc || '';
         if (d.type && window.CASE_TYPES.indexOf(d.type) !== -1) typeSel.set(d.type);
       }
     } catch (e) {}
@@ -1210,6 +1224,7 @@
           poNo: $('fPoNo').value.trim(),
           qty: $('fQty').value.trim(),
           unit: $('fUnit').value.trim(),
+          needByDate: $('fNeedBy').value,
           description: $('fDesc').value.trim(),
           attachments: up.payload(),
         });
@@ -1265,10 +1280,18 @@
 
     var lbl = 'block text-[10px] font-bold tracking-widest uppercase text-muted mb-1.5';
 
+    // 目前的承辦人一定要在選項裡。名單上找不到他（已停用、名單還沒載入）的話，
+    // select 會落到「未指派」，使用者只是改處理結果，儲存時承辦人卻被一起清掉。
+    var members = state.members.slice();
+    var hasCurrent = !c.assignee || members.some(function (m) {
+      return String(m.email).toLowerCase() === String(c.assignee).toLowerCase();
+    });
+    if (!hasCurrent) members.unshift({ email: c.assignee, name: c.assigneeName || c.assignee });
+
     var memberOpts = ['<option value="">（未指派）</option>'].concat(
-      state.members.map(function (m) {
+      members.map(function (m) {
         return '<option value="' + esc(m.email) + '"' +
-          (m.email === c.assignee ? ' selected' : '') + '>' +
+          (String(m.email).toLowerCase() === String(c.assignee || '').toLowerCase() ? ' selected' : '') + '>' +
           esc(m.name || m.email) + '</option>';
       })
     ).join('');
@@ -1432,7 +1455,10 @@
       };
       var patch = {};
       Object.keys(next).forEach(function (k) {
-        if (next[k] !== String(before[k] == null ? '' : before[k]).trim()) patch[k] = next[k];
+        var was = String(before[k] == null ? '' : before[k]).trim();
+        // email 大小寫不同不算改（名單跟案件上的 email 是人工填的，大小寫常常不一致）
+        if (k === 'assignee' ? next[k].toLowerCase() === was.toLowerCase() : next[k] === was) return;
+        patch[k] = next[k];
       });
 
       var toRemove = Object.keys(removeIds);
@@ -1668,20 +1694,26 @@
     var hash = location.hash || '#/';
     var m = hash.match(/^#\/case\/(.+)$/);
     window.scrollTo(0, 0);
-    if (m) return renderDetail(decodeURIComponent(m[1]));
-    if (hash === '#/stats') return renderStats();
 
-    // 開站的第一次渲染直接用 session.login/resume 那趟帶回來的資料，不再多打 API
+    // 開站那一趟帶回來的 meta（成員名單、案件類型）不管進哪一頁都要先套用。
+    // 之前只有進列表頁才套，從通知信直接點進某張單時成員名單是空的，
+    // 編輯視窗的承辦人下拉只剩「未指派」，一按儲存就把承辦人清掉了。
     var boot = Auth.takeBoot();
     if (boot) {
       state.stats = boot.stats || null;
       pendingMeta = boot.meta || null;
       applyMeta(pendingMeta);
-      // boot 帶回來的是「沒有任何篩選」的第一頁；從詳情頁點「同料號看全部」進來時
-      // 已經帶著篩選了，拿那份來畫就會是錯的清單
-      if (!hasFilter()) return renderList(boot.list);
+      bootList = boot.list || null;
     }
-    return renderList();
+
+    if (m) return renderDetail(decodeURIComponent(m[1]));
+    if (hash === '#/stats') return renderStats();
+
+    // 開站的第一次列表直接用 boot 帶回來的那一頁，不再多打 API。
+    // 那是「沒有任何篩選」的第一頁；從詳情頁點「同料號看全部」進來時已經帶著篩選，不能用
+    var preloaded = hasFilter() ? null : bootList;
+    bootList = null;
+    return renderList(preloaded);
   }
 
   /* ══════════════ 啟動 ══════════════ */
@@ -1734,6 +1766,7 @@
   }
 
   var pendingMeta = null;
+  var bootList = null;   // 開站那一趟帶回來的列表第一頁，等第一次進列表頁時用掉
   var started = false;
 
   Auth.init(function (u) {

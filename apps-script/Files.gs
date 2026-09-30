@@ -51,44 +51,64 @@ function getOrCreateCaseFolder_(caseId) {
  * 內部共用：把 base64 附件陣列存進 Drive（每案一個子資料夾）+ 寫入 Attachments 分頁。
  * 分享模式固定「網域內知道連結者可檢視」，外部人拿到連結也打不開。
  * 回傳存好的 Attachments sheet row 陣列（原始欄位名，attId 不是 attachmentId）。
+ *
+ * 盡量做到「全有或全無」，不留下沒人管的 Drive 檔案：
+ *  1. 全部先驗過（缺資料、太大）才開始上傳——之前是邊驗邊傳，第二個檔太大時
+ *     第一個已經進 Drive、也寫了紀錄，使用者卻只看到錯誤訊息
+ *  2. Drive 上傳在鎖外做（可能好幾秒，不該擋住別人）
+ *  3. 紀錄在同一把鎖裡一次寫完；任何一步失敗就把這批已上傳的檔案丟回垃圾桶
  */
 function saveAttachments(caseId, commentId, attachments, user) {
-  const folder = getOrCreateCaseFolder_(caseId);
-  const saved = [];
-
-  attachments.forEach(function (att) {
+  const prepared = attachments.map(function (att) {
     if (!att || !att.dataBase64 || !att.fileName) {
       throw new AppError('BAD_REQUEST', '附件資料不完整');
     }
     const decoded = Utilities.base64Decode(att.dataBase64);
     validateAttachmentSize_(att.mimeType, decoded.length, att.fileName);
-
-    const mimeType = att.mimeType || 'application/octet-stream';
-    const blob = Utilities.newBlob(decoded, mimeType, att.fileName);
-    const file = folder.createFile(blob);
-    file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
-
-    const row = {
-      attId: 'A-' + Utilities.getUuid(),
-      caseId: caseId,
-      commentId: commentId || '',
-      fileName: att.fileName,
-      mimeType: mimeType,
-      size: decoded.length,
-      driveFileId: file.getId(),
-      viewUrl: 'https://drive.google.com/file/d/' + file.getId() + '/view',
-      thumbUrl: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w400',
-      uploadedBy: user ? user.email : '',
-      uploadedAt: nowIso_(),
-      isDeleted: false,
-      deletedAt: '',
-      deletedBy: ''
-    };
-    appendRow('Attachments', row);
-    saved.push(row);
+    return { att: att, decoded: decoded, mimeType: att.mimeType || 'application/octet-stream' };
   });
+  if (!prepared.length) return [];
 
-  return saved;
+  const folder = getOrCreateCaseFolder_(caseId);
+  const files = [];
+  try {
+    prepared.forEach(function (p) {
+      const file = folder.createFile(Utilities.newBlob(p.decoded, p.mimeType, p.att.fileName));
+      files.push(file);
+      file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+    });
+
+    const now = nowIso_();
+    const rows = prepared.map(function (p, i) {
+      const fileId = files[i].getId();
+      return {
+        attId: 'A-' + Utilities.getUuid(),
+        caseId: caseId,
+        commentId: commentId || '',
+        fileName: p.att.fileName,
+        mimeType: p.mimeType,
+        size: p.decoded.length,
+        driveFileId: fileId,
+        viewUrl: 'https://drive.google.com/file/d/' + fileId + '/view',
+        thumbUrl: 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w400',
+        uploadedBy: user ? user.email : '',
+        uploadedAt: now,
+        isDeleted: false,
+        deletedAt: '',
+        deletedBy: ''
+      };
+    });
+
+    withWriteLock_(function () {
+      rows.forEach(function (r) { appendRow('Attachments', r); });
+    });
+    return rows;
+  } catch (err) {
+    files.forEach(function (f) {
+      try { f.setTrashed(true); } catch (e) { console.error('trash orphan file failed: ' + e); }
+    });
+    throw err;
+  }
 }
 
 /** Attachments 分頁的 row → 對外 API 用的 DTO：attId 改名 attachmentId，並補上 uploadedByName。 */
