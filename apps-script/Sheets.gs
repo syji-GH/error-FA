@@ -164,8 +164,17 @@ function writeDeferredCells_(sh, rowIdx, deferred) {
  *
  * 不用 sh.appendRow()，因為格式一定要在寫值「之前」設好——先把文字欄位鎖成純文字，
  * Sheets 才不會在寫入的當下就把字串猜成數字或日期。
+ *
+ * 代價是「算列號」跟「寫進去」變成兩步：兩個請求同時進來會算到同一列，
+ * 後寫的把先寫的整列蓋掉，而且兩邊都回成功。所以整段一定要在寫入鎖裡。
  */
 function appendRow(name, obj) {
+  return withWriteLock_(function () {
+    return appendRowUnlocked_(name, obj);
+  });
+}
+
+function appendRowUnlocked_(name, obj) {
   const sh = sheet(name);
   const headers = headersOf_(sh);
   assertKnownFields_(headers, obj, name);
@@ -210,8 +219,20 @@ function findRowIndexById_(sh, headers, idColumn, id) {
   return -1;
 }
 
-/** 依 id 找到列，只更新 patch 裡有的欄位，回傳更新後整列的物件。 */
+/**
+ * 依 id 找到列，只更新 patch 裡有的欄位，回傳更新後整列的物件。
+ *
+ * 整列讀出、整列寫回，所以本身就要在鎖裡，否則兩個請求改同一列的不同欄位會互蓋。
+ * 注意這只保護「這一次」讀寫；呼叫端若要拿舊值算新值（計數加減），
+ * 仍然得自己在外層包 withWriteLock_ 並在鎖裡重讀。
+ */
 function updateRowById(name, idColumn, id, patch) {
+  return withWriteLock_(function () {
+    return updateRowByIdUnlocked_(name, idColumn, id, patch);
+  });
+}
+
+function updateRowByIdUnlocked_(name, idColumn, id, patch) {
   const sh = sheet(name);
   const headers = headersOf_(sh);
   assertKnownFields_(headers, patch, name);

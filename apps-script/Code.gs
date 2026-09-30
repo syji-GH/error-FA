@@ -26,7 +26,7 @@ const SPREADSHEET_ID = 'REPLACE_ME';
 
 // 每次部署前手動 +1（或改成日期字串），doGet 會回傳這個版本號，
 // 一看就知道 /exec 上線的是哪一版，避免部署到錯的 deployment id 卻沒發現。
-const SCRIPT_VERSION = '2026-09-08.1';
+const SCRIPT_VERSION = '2026-09-30.1';
 
 // 案件描述 / 留言內容都是純文字（前端用 white-space:pre-wrap 顯示，自動連結網址），
 // 不接受也不需要 HTML，這裡只做長度上限保護。
@@ -78,15 +78,32 @@ function makeHistory_(caseId, user, action, opts) {
  * 下一個請求進鎖後讀到的還是舊值——案號撞號就有這個成分在。
  *
  * busyMessage 只在需要讓使用者看出「卡在哪一步」時才傳（例如取案號逾時）。
+ *
+ * 可以巢狀呼叫：appendRow / updateRowById 自己也會進鎖（見 Sheets.gs），
+ * 而它們常常是在外層已經拿著鎖的區塊裡被叫到。只有最外層真的拿鎖、flush、放鎖，
+ * 內層直接執行——不靠 LockService 本身是否可重入，那件事官方文件沒有保證。
  */
+let WRITE_LOCK_DEPTH_ = 0;
+
 function withWriteLock_(fn, busyMessage, timeoutMs) {
+  if (WRITE_LOCK_DEPTH_ > 0) {
+    WRITE_LOCK_DEPTH_++;
+    try {
+      return fn();
+    } finally {
+      WRITE_LOCK_DEPTH_--;
+    }
+  }
+
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(timeoutMs || 10000)) {
     throw new AppError('CONFLICT', busyMessage || '系統忙碌中，請稍後再試');
   }
+  WRITE_LOCK_DEPTH_ = 1;
   try {
     return fn();
   } finally {
+    WRITE_LOCK_DEPTH_ = 0;
     SpreadsheetApp.flush();
     lock.releaseLock();
   }

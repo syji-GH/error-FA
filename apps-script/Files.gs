@@ -160,17 +160,23 @@ function attachmentsUpload(user, payload) {
     dataBase64: payload.dataBase64
   }], user);
 
-  updateRowById('Cases', 'caseId', caseId, {
-    attachmentCount: Number(caseRow.attachmentCount || 0) + saved.length,
-    lastActivityAt: nowIso_()
-  });
+  // Drive 上傳在鎖外做完，計數才進鎖、而且要重讀：拿進鎖前那份 caseRow 加一，
+  // 同時有人留言附檔的話其中一邊的數量就不見了（同 commentsCreate）。
+  withWriteLock_(function () {
+    invalidateSheetCache_('Cases');
+    const fresh = getRowById('Cases', 'caseId', caseId) || caseRow;
+    updateRowById('Cases', 'caseId', caseId, {
+      attachmentCount: Number(fresh.attachmentCount || 0) + saved.length,
+      lastActivityAt: nowIso_()
+    });
 
-  // 掛在留言底下的附件由留言本身負責交代，只有直接掛在案件上的才寫入案件歷程
-  if (!payload.commentId) {
-    appendRow('History', makeHistory_(caseId, user, 'attachment.add', {
-      to: saved[0].fileName, refId: saved[0].attId
-    }));
-  }
+    // 掛在留言底下的附件由留言本身負責交代，只有直接掛在案件上的才寫入案件歷程
+    if (!payload.commentId) {
+      appendRow('History', makeHistory_(caseId, user, 'attachment.add', {
+        to: saved[0].fileName, refId: saved[0].attId
+      }));
+    }
+  });
 
   return { attachment: toAttachmentDTO_(saved[0]) };
 }
@@ -209,30 +215,38 @@ function attachmentsThumb(user, payload) {
  * 回傳被移除的 Attachments row；已經移除過的回傳 null（重複移除視為沒事發生）。
  */
 function markAttachmentRemoved_(row, user, at) {
-  if (isAttachmentDeleted_(row)) return null;
-  const now = at || nowIso_();
+  // 整段在鎖裡、而且兩張表都重讀：同一個附件被兩個人同時移除時，
+  // 只有先進鎖的那個會看到「還沒刪」，attachmentCount 才不會被扣兩次。
+  // 從 casesUpdate 進來時外層已經拿著鎖，withWriteLock_ 會直接執行。
+  return withWriteLock_(function () {
+    invalidateSheetCache_('Attachments');
+    invalidateSheetCache_('Cases');
+    const current = getRowById('Attachments', 'attId', row.attId) || row;
+    if (isAttachmentDeleted_(current)) return null;
+    const now = at || nowIso_();
 
-  updateRowById('Attachments', 'attId', row.attId, {
-    isDeleted: true,
-    deletedAt: now,
-    deletedBy: user.email
-  });
-
-  const caseRow = getRowById('Cases', 'caseId', row.caseId);
-  if (caseRow) {
-    updateRowById('Cases', 'caseId', row.caseId, {
-      attachmentCount: Math.max(0, Number(caseRow.attachmentCount || 0) - 1),
-      lastActivityAt: now
+    updateRowById('Attachments', 'attId', row.attId, {
+      isDeleted: true,
+      deletedAt: now,
+      deletedBy: user.email
     });
-  }
 
-  if (!row.commentId) {
-    appendRow('History', makeHistory_(row.caseId, user, 'attachment.remove', {
-      from: row.fileName, refId: row.attId, at: now
-    }));
-  }
+    const caseRow = getRowById('Cases', 'caseId', row.caseId);
+    if (caseRow) {
+      updateRowById('Cases', 'caseId', row.caseId, {
+        attachmentCount: Math.max(0, Number(caseRow.attachmentCount || 0) - 1),
+        lastActivityAt: now
+      });
+    }
 
-  return row;
+    if (!row.commentId) {
+      appendRow('History', makeHistory_(row.caseId, user, 'attachment.remove', {
+        from: row.fileName, refId: row.attId, at: now
+      }));
+    }
+
+    return row;
+  });
 }
 
 /**

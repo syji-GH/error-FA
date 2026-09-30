@@ -286,8 +286,14 @@ function casesCreate(user, payload) {
   if (Array.isArray(payload.attachments) && payload.attachments.length > 0) {
     const saved = saveAttachments(caseId, '', payload.attachments, user);
     if (saved.length > 0) {
-      caseRow.attachmentCount = saved.length;
-      updateRowById('Cases', 'caseId', caseId, { attachmentCount: saved.length });
+      // 用「重讀再加」而不是直接寫 saved.length：上傳 Drive 的這幾秒內，
+      // 別人可能已經在這張新單底下留言附檔，直接覆寫會把那些數量吃掉
+      withWriteLock_(function () {
+        invalidateSheetCache_('Cases');
+        const fresh = getRowById('Cases', 'caseId', caseId) || caseRow;
+        caseRow.attachmentCount = Number(fresh.attachmentCount || 0) + saved.length;
+        updateRowById('Cases', 'caseId', caseId, { attachmentCount: caseRow.attachmentCount });
+      });
     }
   }
 
@@ -513,7 +519,7 @@ function casesSetStatus(user, payload) {
     throw new AppError('BAD_REQUEST', '狀態不正確');
   }
 
-  return withWriteLock_(function () {
+  const result = withWriteLock_(function () {
     const caseRow = getRowById('Cases', 'caseId', caseId);
     if (!caseRow) throw new AppError('NOT_FOUND', '找不到案件：' + caseId);
     if (isCaseVoided_(caseRow)) {
@@ -545,16 +551,20 @@ function casesSetStatus(user, payload) {
     });
     appendRow('History', historyRow);
 
-    if (status !== caseRow.status) {
-      try {
-        notifyStatusChange(caseRow, updated, user);
-      } catch (err) {
-        console.error('notifyStatusChange failed: ' + err);
-      }
-    }
-
-    return { case: updated, historyEntry: toHistoryDTO_(historyRow) };
+    return { before: caseRow, updated: updated, historyRow: historyRow };
   });
+
+  // 寄信放在鎖外：MailApp 一個收件人就可能要一兩秒，在鎖裡寄的話
+  // 這段時間全站所有寫入都會排隊，別人看到的就是「系統忙碌中」。
+  if (status !== result.before.status) {
+    try {
+      notifyStatusChange(result.before, result.updated, user);
+    } catch (err) {
+      console.error('notifyStatusChange failed: ' + err);
+    }
+  }
+
+  return { case: result.updated, historyEntry: toHistoryDTO_(result.historyRow) };
 }
 
 /**
