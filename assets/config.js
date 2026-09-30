@@ -27,6 +27,8 @@ window.CONFIG = {
 
 /* ── 常數：需與 Apps Script 端一致 ───────────────────────────── */
 
+// 預設值。登入後會改用後端 meta.bootstrap 回傳的清單（來自試算表 Config.caseTypes），
+// 所以要增減類型請改 Config，不用改這裡。
 window.CASE_TYPES = ['需追加採購', '廠商送錯', '料號變更', '物料異常', '其他'];
 
 window.STATUSES = ['待處理', '處理中', '暫緩', '已結案'];

@@ -92,6 +92,10 @@ function commentsUpdate(user, payload) {
   if (!(user.role === 'admin' || sameEmail_(user.email, commentRow.authorEmail))) {
     throw new AppError('FORBIDDEN', '沒有權限編輯這則留言');
   }
+  // 跟 commentsCreate 同一條規則：作廢的單是凍結的，留言也不能再動
+  if (isCaseVoided_(getRowById('Cases', 'caseId', commentRow.caseId))) {
+    throw new AppError('BAD_REQUEST', '這張單已作廢，要修改留言請先復原');
+  }
 
   const now = nowIso_();
   const updated = withWriteLock_(function () {
@@ -120,6 +124,9 @@ function commentsDelete(user, payload) {
 
   if (!(user.role === 'admin' || sameEmail_(user.email, commentRow.authorEmail))) {
     throw new AppError('FORBIDDEN', '沒有權限刪除這則留言');
+  }
+  if (isCaseVoided_(getRowById('Cases', 'caseId', commentRow.caseId))) {
+    throw new AppError('BAD_REQUEST', '這張單已作廢，要刪除留言請先復原');
   }
 
   const now = nowIso_();

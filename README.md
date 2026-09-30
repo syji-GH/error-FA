@@ -82,9 +82,18 @@ OAuth client ID → Web application**
   跨網域請求會被導到 Google 登入頁而不是回 JSON，前端一定壞。
   身分是我們自己驗 ID token，不靠這個設定。
 - 之後每次改版都要用**同一個 deployment ID** 重新部署，否則 `/exec` 網址會變、前端會斷。
-- 在 Script Properties 填入 `GOOGLE_CLIENT_ID`、`ALLOWED_DOMAIN`、`SPREADSHEET_ID`、
-  `DRIVE_ROOT_FOLDER_ID`、`FACTORY_GROUP_EMAIL`。
-- 執行一次 `setupSheets()` 建立六個分頁與表頭。
+- 在 **Script Properties** 只要填兩個：`CLIENT_ID`（第 2 步的 OAuth Client ID）、
+  `SPREADSHEET_ID`（第 1 步的試算表 ID）。
+- 執行一次 `setupSheets()` 建立六個分頁與表頭，然後到試算表的 **`Config` 分頁**填：
+
+  | key | 填什麼 |
+  |---|---|
+  | `driveRootFolderId` | 第 1 步 `cases/` 資料夾的 ID（附件存這裡） |
+  | `facilityGroupEmail` | 第 1 步的廠務部群組信箱（新開單通知寄這裡） |
+  | `caseTypes` | 案件類型，逗號分隔；已預填，要增減類型改這裡即可，前後端都會跟著變 |
+  | `frontendBaseUrl` | 通知信裡的連結前綴，已預填 GitHub Pages 網址 |
+
+- 允許登入的網域 `ecoco.xyz` 寫死在 `apps-script/Auth.gs` 的 `verifyIdToken()`，不是設定值。
 
 ### 4. 填前端設定
 
@@ -141,7 +150,7 @@ Repo → **Settings → Pages → Source: Deploy from a branch → `main` / `/ (
 | `assets/auth.js` | Google 登入、session token、逾期重新登入 |
 | `assets/api.js` | 與後端溝通的唯一入口（CORS 限制都寫在這裡的註解） |
 | `assets/ui.js` | badge、modal、toast、頭像、時間格式等共用元件 |
-| `assets/app.js` | 路由、列表頁、詳情頁、留言、開單、附件上傳 |
+| `assets/app.js` | 路由、列表頁（分頁、匯出 CSV）、詳情頁（含同料號歷史）、統計頁、留言、開單、附件上傳 |
 | `assets/styles.css` | Tailwind utility 蓋不掉的少數樣式 |
 
 ---

@@ -11,7 +11,7 @@
 | `Code.gs` | `doPost`/`doGet` 路由、action 對照表、回應信封、`meta.bootstrap` |
 | `Auth.gs` | 驗 Google ID token、Session 簽發與驗證、角色判定 |
 | `Sheets.gs` | Sheets 存取層（表頭驅動的讀寫） |
-| `Cases.gs` | 案件 CRUD、狀態變更、統計 |
+| `Cases.gs` | 案件 CRUD、狀態變更、統計卡、統計頁報表、CSV 匯出、同料號歷史 |
 | `Comments.gs` | 留言 CRUD（軟刪除） |
 | `Files.gs` | 附件上傳／縮圖／刪除（Drive） |
 | `Notify.gs` | Email 通知（新單／新留言／狀態變更） |

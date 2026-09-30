@@ -136,5 +136,7 @@ window.API = (function () {
     uploadFile:    function (data)   { return call('attachments.upload', data); },
     getThumb:      function (id)     { return call('attachments.thumb', { attachmentId: id }); },
     stats:         function ()       { return call('cases.stats'); },
+    exportCases:   function (q)      { return call('cases.export', q || {}); },
+    report:        function (sinceMonths) { return call('cases.report', { sinceMonths: sinceMonths || 0 }); },
   };
 })();

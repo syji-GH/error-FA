@@ -10,13 +10,26 @@ const CASE_TYPES = ['需追加採購', '廠商送錯', '料號變更', '物料�
 // 單一料號，硬性要求只會讓開單的人隨便填一個，反而把資料弄髒。
 const TYPE_WITHOUT_PART_NO = '其他';
 
+/**
+ * 目前可用的案件類型：Config.caseTypes（逗號分隔）有填就以它為準，沒填才用上面的預設值。
+ *
+ * meta.bootstrap 給前端的清單跟這裡驗證用的必須是同一份——之前前端讀 Config、
+ * 後端卻只認寫死的 CASE_TYPES，管理員在 Config 加一個類型，畫面上選得到、送出去卻被擋。
+ */
+function caseTypes_() {
+  const list = String(getConfig('caseTypes') || '').split(',')
+    .map(function (s) { return s.trim(); })
+    .filter(Boolean);
+  return list.length ? list : CASE_TYPES;
+}
+
 /** Cases 的 isVoided 可能是布林值也可能是字串 'TRUE'，跟其他軟刪除欄位一樣兩種都要吃。 */
 function isCaseVoided_(row) {
   return !!row && (row.isVoided === true || String(row.isVoided).toUpperCase() === 'TRUE');
 }
 
-function casesList(user, payload) {
-  payload = payload || {};
+/** cases.list 與 cases.export 共用的篩選＋排序（最近有動靜的在前）。 */
+function filterCases_(user, payload) {
   let rows = readAll('Cases');
 
   // 作廢的單預設不出現。要看的話帶 voided:true，而且**只**回作廢的那些——
@@ -40,6 +53,12 @@ function casesList(user, payload) {
   rows.sort(function (a, b) {
     return String(b.lastActivityAt || b.createdAt).localeCompare(String(a.lastActivityAt || a.createdAt));
   });
+  return rows;
+}
+
+function casesList(user, payload) {
+  payload = payload || {};
+  const rows = filterCases_(user, payload);
 
   const limit = Math.min(Number(payload.limit) || 50, 200);
   const offset = Math.max(0, Number(payload.offset) || 0);
@@ -62,6 +81,18 @@ function casesList(user, payload) {
   // 不如順手算完一起回去——反正 Cases 這張表在同一個請求裡已經讀進記憶體了。
   if (payload.withStats) out.stats = casesStats(user, {});
   return out;
+}
+
+/**
+ * cases.export：目前篩選條件下的「全部」案件（不分頁、含描述全文），前端轉成 CSV。
+ * 跟 cases.list 分開是因為列表刻意不帶描述、而且有 200 筆上限。
+ */
+function casesExport(user, payload) {
+  const rows = filterCases_(user, payload || {});
+  return {
+    items: rows.map(function (r) { return Object.assign({}, r); }),
+    total: rows.length
+  };
 }
 
 /** 只挑圖片附件，依案號分組、依上傳時間新到舊排序，每案最多留 3 張，給列表卡片當縮圖用。 */
@@ -139,6 +170,7 @@ function casesGet(user, payload) {
 
   return {
     case: caseRow,
+    related: relatedByPartNo_(caseRow),
     comments: comments,
     attachments: attachments,
     removedAttachments: removedAttachments,
@@ -150,6 +182,35 @@ function casesGet(user, payload) {
       canVoid: canVoidCase(user, caseRow),
       canUnvoid: canUnvoidCase(user, caseRow)
     }
+  };
+}
+
+/**
+ * 同料號的其他案件（新到舊，最多 10 筆，另回總數）。
+ * 這個看板要回答的問題之一就是「這個料號到底出過幾次事」，
+ * 作廢的單不算——它本來就不該存在。料號比對忽略大小寫與前後空白，人工輸入常常不一致。
+ */
+const RELATED_LIMIT = 10;
+
+function relatedByPartNo_(caseRow) {
+  const key = String(caseRow.partNo || '').trim().toLowerCase();
+  if (!key) return { items: [], total: 0 };
+
+  const all = readAll('Cases').filter(function (r) {
+    return r.caseId !== caseRow.caseId && !isCaseVoided_(r) &&
+      String(r.partNo || '').trim().toLowerCase() === key;
+  });
+  all.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
+
+  return {
+    items: all.slice(0, RELATED_LIMIT).map(function (r) {
+      return {
+        caseId: r.caseId, title: r.title, partNo: r.partNo, type: r.type,
+        status: r.status, vendor: r.vendor, createdAt: r.createdAt,
+        createdByName: r.createdByName
+      };
+    }),
+    total: all.length
   };
 }
 
@@ -236,7 +297,7 @@ function casesCreate(user, payload) {
   const partNo = payload.partNo ? String(payload.partNo).trim() : '';
   const description = payload.description;
 
-  if (!type || CASE_TYPES.indexOf(type) === -1) {
+  if (!type || caseTypes_().indexOf(type) === -1) {
     throw new AppError('BAD_REQUEST', '案件類型不正確');
   }
   if (!partNo && type !== TYPE_WITHOUT_PART_NO) {
@@ -422,8 +483,10 @@ function casesUpdate(user, payload) {
 
     // 必填規則要拿「改完之後的樣子」來驗，不能只看 patch——
     // 只改類型的請求也可能讓原本合法的料號變成不合法（反之亦然）。
+    // 類型只在「這次有要改」時才驗：管理員之後從 Config 拿掉某個類型，
+    // 舊單還是那個類型，不該因此連承辦人都改不了
     const merged = Object.assign({}, caseRow, patch);
-    if (CASE_TYPES.indexOf(merged.type) === -1) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'type') && caseTypes_().indexOf(patch.type) === -1) {
       throw new AppError('BAD_REQUEST', '案件類型不正確');
     }
     if (!String(merged.partNo || '').trim() && merged.type !== TYPE_WITHOUT_PART_NO) {
@@ -528,12 +591,21 @@ function casesSetStatus(user, payload) {
     if (!canSetStatus(user, caseRow)) {
       throw new AppError('FORBIDDEN', '沒有權限變更這張案件的狀態');
     }
-    if (status === '已結案' && !String(caseRow.resolution || '').trim()) {
-      throw new AppError('BAD_REQUEST', '結案前請先用 cases.update 填寫處理結果（resolution）');
+    // 結案一定要有處理結果。前端的結案視窗本來就要求填「結案說明」，
+    // 處理結果還空著的話就直接拿它補上——之前這裡只會丟錯，使用者得先關掉視窗、
+    // 按「編輯」填處理結果、再回來結案一次，而錯誤訊息還是給工程師看的。
+    const trimmedNote = String(note).trim();
+    const fillResolution = status === '已結案' && !String(caseRow.resolution || '').trim();
+    if (fillResolution && !trimmedNote) {
+      throw new AppError('BAD_REQUEST', '結案前請填寫處理結果');
+    }
+    if (trimmedNote.length > MAX_TEXT_LEN) {
+      throw new AppError('BAD_REQUEST', '說明過長（上限 ' + MAX_TEXT_LEN + ' 字）');
     }
 
     const now = nowIso_();
     const writePatch = { status: status, lastActivityAt: now };
+    if (fillResolution) writePatch.resolution = trimmedNote;
 
     if (status === '已結案' && caseRow.status !== '已結案') {
       writePatch.closedAt = now;
@@ -550,6 +622,10 @@ function casesSetStatus(user, payload) {
       from: caseRow.status, to: status, note: note, at: now
     });
     appendRow('History', historyRow);
+    // 處理結果是順手補上的，一樣要留歷程；共用時間戳，前端會跟狀態變更併成同一組顯示
+    if (fillResolution) {
+      appendRow('History', makeHistory_(caseId, user, 'resolution', { from: '', to: trimmedNote, at: now }));
+    }
 
     return { before: caseRow, updated: updated, historyRow: historyRow };
   });
@@ -655,4 +731,114 @@ function casesStats(user, payload) {
     if (Object.prototype.hasOwnProperty.call(out, r.status)) out[r.status]++;
   });
   return out;
+}
+
+/**
+ * cases.report：統計頁要的數字，一次算完回去。
+ *
+ * payload.sinceMonths：只看最近 N 個月開的單（依 createdAt）；不帶就是全部。
+ * 月趨勢固定回最近 12 個月，不受 sinceMonths 影響——趨勢要夠長才看得出東西。
+ *
+ * 結案天數 = closedAt − createdAt。重新開過的單 closedAt 會被清掉（見 casesSetStatus），
+ * 所以算到的是最後一次結案，這是刻意的：重開代表上一次其實沒解決。
+ */
+const REPORT_TOP_VENDORS = 15;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function casesReport(user, payload) {
+  payload = payload || {};
+  const tz = Session.getScriptTimeZone();
+  const now = new Date();
+  const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  const nowYear = Number(Utilities.formatDate(now, tz, 'yyyy'));
+  const nowMonth = Number(Utilities.formatDate(now, tz, 'M'));   // 1..12
+
+  function monthKey_(iso) {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, tz, 'yyyy-MM');
+  }
+  function monthsAgoKey_(n) {
+    const idx = nowYear * 12 + (nowMonth - 1) - n;
+    const y = Math.floor(idx / 12);
+    const m = idx % 12 + 1;
+    return y + '-' + (m < 10 ? '0' + m : m);
+  }
+  function closeDays_(r) {
+    if (r.status !== '已結案' || !r.closedAt) return null;
+    const d = (new Date(r.closedAt).getTime() - new Date(r.createdAt).getTime()) / DAY_MS;
+    return isNaN(d) || d < 0 ? null : d;
+  }
+  function isOverdue_(r) {
+    if (r.status === '已結案' || !r.needByDate) return false;
+    const due = normalizeForCompare_('needByDate', r.needByDate);
+    return /^\d{4}-\d{2}-\d{2}$/.test(due) && due < today;
+  }
+  function round1_(n) { return Math.round(n * 10) / 10; }
+
+  const all = readAll('Cases').filter(function (r) { return !isCaseVoided_(r); });
+
+  const sinceMonths = Math.max(0, Math.floor(Number(payload.sinceMonths) || 0));
+  const sinceKey = sinceMonths ? monthsAgoKey_(sinceMonths - 1) : '';
+  const rows = sinceKey
+    ? all.filter(function (r) { return monthKey_(r.createdAt) >= sinceKey; })
+    : all;
+
+  function newBucket_(key) {
+    return { key: key, total: 0, open: 0, closed: 0, overdue: 0, sum: 0, n: 0 };
+  }
+  function addTo_(b, r) {
+    b.total++;
+    if (r.status === '已結案') b.closed++; else b.open++;
+    if (isOverdue_(r)) b.overdue++;
+    const d = closeDays_(r);
+    if (d !== null) { b.sum += d; b.n++; }
+  }
+  function finish_(b) {
+    return {
+      key: b.key, total: b.total, open: b.open, closed: b.closed, overdue: b.overdue,
+      avgCloseDays: b.n ? round1_(b.sum / b.n) : null
+    };
+  }
+  function groupBy_(keyFn) {
+    const map = {};
+    rows.forEach(function (r) {
+      const k = keyFn(r);
+      if (!map[k]) map[k] = newBucket_(k);
+      addTo_(map[k], r);
+    });
+    return Object.keys(map).map(function (k) { return finish_(map[k]); })
+      .sort(function (a, b) { return b.total - a.total || String(a.key).localeCompare(String(b.key)); });
+  }
+
+  const overall = newBucket_('all');
+  rows.forEach(function (r) { addTo_(overall, r); });
+
+  const byVendorAll = groupBy_(function (r) { return String(r.vendor || '').trim() || '（未填）'; });
+
+  // 月趨勢：最近 12 個月每月開了幾張、結了幾張
+  const months = [];
+  const monthIdx = {};
+  for (let i = 11; i >= 0; i--) {
+    const k = monthsAgoKey_(i);
+    monthIdx[k] = months.length;
+    months.push({ month: k, opened: 0, closed: 0 });
+  }
+  all.forEach(function (r) {
+    const o = monthIdx[monthKey_(r.createdAt)];
+    if (o !== undefined) months[o].opened++;
+    if (r.status === '已結案' && r.closedAt) {
+      const c = monthIdx[monthKey_(r.closedAt)];
+      if (c !== undefined) months[c].closed++;
+    }
+  });
+
+  return {
+    generatedAt: nowIso_(),
+    sinceMonths: sinceMonths,
+    overall: finish_(overall),
+    byType: groupBy_(function (r) { return r.type || '（未填）'; }),
+    byVendor: byVendorAll.slice(0, REPORT_TOP_VENDORS),
+    vendorCount: byVendorAll.length,
+    months: months
+  };
 }

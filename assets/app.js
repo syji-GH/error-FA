@@ -8,6 +8,7 @@
   var state = {
     filter: { status: '', type: '', q: '', mine: false, voided: false },
     cases: [],
+    total: 0,
     stats: null,
     members: [],
   };
@@ -244,16 +245,24 @@
 
   /* ══════════════ 列表頁 ══════════════ */
 
-  function listQuery() {
+  // 跟後端 cases.list 的預設 limit 一致，開站那一趟（沒帶 limit）拿到的也是這麼多
+  var PAGE_SIZE = 50;
+
+  function filterQuery() {
     return {
       status: state.filter.status,
       type: state.filter.type,
       q: state.filter.q,
       mine: state.filter.mine,
       voided: state.filter.voided,
-      limit: 100,
-      withStats: true,   // 統計跟清單一起回，省一趟往返
     };
+  }
+
+  function listQuery() {
+    return Object.assign(filterQuery(), {
+      limit: PAGE_SIZE,
+      withStats: true,   // 統計跟清單一起回，省一趟往返
+    });
   }
 
   /** preloaded 是開站那一趟已經拿到的結果，有的話就不再打一次 API */
@@ -270,18 +279,123 @@
         if (sb) sb.outerHTML = statBar(state.stats);
       }
       state.cases = res.items || [];
-      var box = document.getElementById('caseList');
-      if (!box) return;
-      box.innerHTML = state.cases.length
-        ? '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">' +
-            state.cases.map(caseCard).join('') + '</div>'
-        : UI.empty(state.filter.voided ? '沒有已作廢的異常單' : '沒有符合條件的異常單',
-            state.filter.voided
-              ? '作廢的單會留在這裡，不會真的被刪掉'
-              : (state.filter.q || state.filter.status || state.filter.type
-                  ? '換個篩選條件看看' : '點右上角「開新異常單」建立第一筆'));
+      state.total = typeof res.total === 'number' ? res.total : state.cases.length;
+      paintCaseList();
     } catch (err) {
       showError(document.getElementById('caseList'), err);
+    }
+  }
+
+  function paintCaseList() {
+    var box = document.getElementById('caseList');
+    if (!box) return;
+    box.innerHTML = state.cases.length
+      ? '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">' +
+          state.cases.map(caseCard).join('') + '</div>' + listFooter()
+      : UI.empty(state.filter.voided ? '沒有已作廢的異常單' : '沒有符合條件的異常單',
+          state.filter.voided
+            ? '作廢的單會留在這裡，不會真的被刪掉'
+            : (state.filter.q || state.filter.status || state.filter.type
+                ? '換個篩選條件看看' : '點右上角「開新異常單」建立第一筆'));
+  }
+
+  /**
+   * 列表底部：永遠講清楚「顯示了幾筆、總共幾筆」。
+   * 之前只拿前 100 筆又不說，舊單就這樣安靜地從畫面上消失了。
+   */
+  function listFooter() {
+    var shown = state.cases.length;
+    var more = shown < state.total;
+    return '<div class="mt-6 flex flex-col items-center gap-3">' +
+      '<p class="text-xs font-medium text-muted">已顯示 ' + shown + ' / 共 ' + state.total + ' 筆</p>' +
+      (more
+        ? '<button id="btnMore" class="' + UI.btn.ghost + ' border border-line bg-white">' +
+          '再載入 ' + Math.min(PAGE_SIZE, state.total - shown) + ' 筆</button>'
+        : '') +
+      '</div>';
+  }
+
+  async function loadMore(btn) {
+    btn.disabled = true; btn.textContent = '載入中…';
+    try {
+      var res = await API.listCases(Object.assign(filterQuery(), {
+        limit: PAGE_SIZE, offset: state.cases.length,
+      }));
+      // 兩次請求之間有人留言的話，排序會移動，同一張單可能出現在兩頁——用案號去重
+      var seen = {};
+      state.cases.forEach(function (c) { seen[c.caseId] = true; });
+      (res.items || []).forEach(function (c) {
+        if (!seen[c.caseId]) { seen[c.caseId] = true; state.cases.push(c); }
+      });
+      if (typeof res.total === 'number') state.total = res.total;
+      paintCaseList();
+    } catch (err) {
+      btn.disabled = false; btn.textContent = '再試一次';
+      UI.toast(err.message, 'error');
+    }
+  }
+
+  /* ── 匯出 CSV ── */
+
+  var CSV_COLS = [
+    ['caseId', '案號'], ['status', '狀態'], ['type', '類型'], ['title', '標題'],
+    ['partNo', '料號'], ['partName', '品名'], ['vendor', '廠商'], ['poNo', '採購單號'],
+    ['qty', '數量'], ['unit', '單位'], ['needByDate', '需求日', 'date'],
+    ['createdByName', '開單人'], ['createdAt', '開單時間', 'time'],
+    ['assigneeName', '承辦人'], ['resolution', '處理結果'], ['closedAt', '結案時間', 'time'],
+    ['lastActivityAt', '最後更新', 'time'], ['commentCount', '留言數'], ['attachmentCount', '附件數'],
+    ['description', '狀況說明'],
+  ];
+  var CSV_VOID_COLS = [['voidReason', '作廢原因'], ['voidedAt', '作廢時間', 'time']];
+
+  /**
+   * 一格 CSV。兩件事：
+   *  - 逗號、引號、換行要包雙引號（描述常常是多行）
+   *  - '=' '+' '-' '@' 開頭的內容 Excel 會當公式執行（CSV injection），前面補一個單引號。
+   *    純數字（例如負的數量）例外，不然數字欄會變成文字。
+   */
+  function csvCell(v) {
+    var s = String(v == null ? '' : v);
+    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = "'" + s;
+    if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  function csvValue(c, col) {
+    var v = c[col[0]];
+    if (col[2] === 'date') return toDateInput(v);
+    if (col[2] === 'time') return v ? UI.fmtDate(v) : '';
+    return v;
+  }
+
+  async function exportCsv(btn) {
+    var label = btn.textContent;
+    btn.disabled = true; btn.textContent = '匯出中…';
+    try {
+      var res = await API.exportCases(filterQuery());
+      var items = res.items || [];
+      if (!items.length) { UI.toast('目前的篩選條件下沒有資料可匯出'); return; }
+
+      var cols = CSV_COLS.concat(state.filter.voided ? CSV_VOID_COLS : []);
+      var lines = [cols.map(function (col) { return csvCell(col[1]); }).join(',')];
+      items.forEach(function (c) {
+        lines.push(cols.map(function (col) { return csvCell(csvValue(c, col)); }).join(','));
+      });
+
+      // 開頭的 BOM 是給 Excel 看的：沒有它，Excel 會用 Big5 開 UTF-8，中文全變亂碼
+      var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'error-FA_' + toDateInput(new Date().toISOString()).replace(/-/g, '') + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      UI.toast('已匯出 ' + items.length + ' 筆', 'ok');
+    } catch (err) {
+      UI.toast(err.message, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = label;
     }
   }
 
@@ -322,7 +436,12 @@
           (state.filter.voided ? 'bg-ink text-white' : 'text-muted hover:text-ink hover:bg-card') +
           '">已作廢</button>' +
       '</div>' +
-      '<div class="flex gap-1 overflow-x-auto scrollbar-hide -mx-1 px-1">' + typeChips + '</div>' +
+      '<div class="flex items-center gap-2">' +
+        '<div class="flex-1 min-w-0 flex gap-1 overflow-x-auto scrollbar-hide -mx-1 px-1">' + typeChips + '</div>' +
+        '<button id="btnExport" title="依目前的篩選條件匯出全部案件" ' +
+          'class="shrink-0 rounded-full px-4 py-1.5 text-[13px] font-bold border border-line bg-white ' +
+          'text-muted hover:text-ink hover:bg-card transition-colors disabled:opacity-50">匯出 CSV</button>' +
+      '</div>' +
     '</div>';
   }
 
@@ -351,6 +470,10 @@
         state.filter.voided = !state.filter.voided;
         return renderList();
       }
+      var more = e.target.closest('#btnMore');
+      if (more && !more.disabled) return loadMore(more);
+      var exp = e.target.closest('#btnExport');
+      if (exp && !exp.disabled) return exportCsv(exp);
     });
   }
 
@@ -488,9 +611,16 @@
         // ── 右側資訊欄
         '<div class="space-y-4 lg:sticky lg:top-24">' +
           metaPanel(c) +
+          relatedPanel(data.related, c) +
           historyPanel(data.history || [], indexAttachments(data)) +
         '</div>' +
       '</div>';
+
+    var relAll = document.getElementById('btnRelatedAll');
+    if (relAll) relAll.addEventListener('click', function () {
+      state.filter = { status: '', type: '', q: String(c.partNo || '').trim(), mine: false, voided: false };
+      location.hash = '#/';
+    });
 
     if (!voided) {
       mountComposer(c.caseId);
@@ -679,6 +809,36 @@
     return '<div class="bg-white rounded-2xl border border-line shadow-sm p-5 space-y-4">' +
       '<p class="text-[10px] font-bold tracking-widest uppercase text-muted">案件資訊</p>' +
       rows + '</div>';
+  }
+
+  /**
+   * 同料號的其他異常。這個看板要回答的問題之一就是「這個料號到底出過幾次事」，
+   * 開著一張單的時候最需要知道：上次同樣的問題是怎麼處理的。
+   */
+  function relatedPanel(rel, c) {
+    if (!rel || !rel.total) return '';
+    var items = (rel.items || []).map(function (r) {
+      return '<a href="#/case/' + esc(r.caseId) + '" class="block rounded-xl px-3 py-2.5 -mx-3 ' +
+        'hover:bg-card transition-colors">' +
+        '<div class="flex items-center gap-2">' +
+          UI.statusBadge(r.status) +
+          '<span class="ml-auto text-[10px] font-bold tracking-widest text-muted">' + esc(r.caseId) + '</span>' +
+        '</div>' +
+        '<p class="mt-1.5 text-sm font-bold text-ink truncate">' + esc(r.title || r.type) + '</p>' +
+        '<p class="text-xs font-medium text-muted truncate">' +
+          esc([r.type, r.vendor, UI.fmtDate(r.createdAt).slice(0, 10)].filter(Boolean).join(' · ')) +
+        '</p></a>';
+    }).join('');
+
+    return '<div class="bg-white rounded-2xl border border-line shadow-sm p-5">' +
+      '<p class="text-[10px] font-bold tracking-widest uppercase text-muted">同料號的其他異常</p>' +
+      '<p class="mt-1 text-sm font-bold text-ink">' + esc(c.partNo) + ' 另外出過 ' + rel.total + ' 次</p>' +
+      '<div class="mt-3 space-y-1">' + items + '</div>' +
+      (rel.total > (rel.items || []).length
+        ? '<button id="btnRelatedAll" class="mt-2 text-xs font-bold text-ecoco-blue hover:underline">' +
+          '在列表中看全部 ' + rel.total + ' 筆</button>'
+        : '') +
+      '</div>';
   }
 
   /* ══════════════ 處理歷程 ══════════════ */
@@ -1300,6 +1460,196 @@
     });
   }
 
+  /* ══════════════ 統計頁 ══════════════ */
+
+  // 圖表配色：品牌橘＋品牌青藍，已用 dataviz 的 validate_palette 驗過（亮度、色盲可辨、對比都 PASS）。
+  // 品牌深藍 #060E9F 太暗沒過亮度區間，所以不用在圖上。
+  var SERIES = { opened: '#FF5000', closed: '#0076A9' };
+  var RANGES = [[3, '近 3 個月'], [12, '近 12 個月'], [0, '全部']];
+  var statsRange = 12;
+
+  async function renderStats() {
+    view.innerHTML =
+      '<div class="flex items-center gap-3 flex-wrap mb-6">' +
+        '<h1 class="text-2xl font-black tracking-tight text-ink">統計</h1>' +
+        '<div id="rangeRow" class="ml-auto flex gap-1">' + RANGES.map(function (r) {
+          var on = r[0] === statsRange;
+          return '<button data-range="' + r[0] + '" class="rounded-full px-4 py-1.5 text-[13px] font-bold ' +
+            'transition-colors ' + (on ? 'bg-ecoco-blue text-white' : 'text-muted hover:text-ink hover:bg-card') +
+            '">' + r[1] + '</button>';
+        }).join('') + '</div>' +
+      '</div>' +
+      '<div id="statsBody">' + UI.skeleton(3) + '</div>';
+
+    document.getElementById('rangeRow').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-range]');
+      if (!b) return;
+      statsRange = Number(b.dataset.range);
+      renderStats();
+    });
+
+    var body = document.getElementById('statsBody');
+    try {
+      var r = await API.report(statsRange);
+      if (!document.getElementById('statsBody')) return;   // 等資料的時候已經換頁了
+      body.innerHTML = statsTiles(r.overall) +
+        '<div class="mt-6">' + monthChart(r.months) + '</div>' +
+        '<div class="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">' +
+          groupTable('依異常類型', r.byType, '類型') +
+          groupTable('依廠商', r.byVendor, '廠商',
+            r.vendorCount > r.byVendor.length ? '只列件數最多的 ' + r.byVendor.length + ' 家（共 ' + r.vendorCount + ' 家）' : '') +
+        '</div>' +
+        '<p class="mt-6 text-xs font-medium text-muted">不含已作廢的單。平均結案天數＝開單到結案的天數；' +
+          '重新開過的單以最後一次結案計。逾期＝已過需求日但還沒結案。</p>';
+    } catch (err) {
+      showError(body, err);
+    }
+  }
+
+  function statsTiles(o) {
+    function tile(label, value, hint) {
+      return '<div class="bg-white rounded-2xl border border-line shadow-sm p-5">' +
+        '<p class="text-[10px] font-bold tracking-widest uppercase text-muted">' + esc(label) + '</p>' +
+        '<p class="mt-2 text-3xl font-black tracking-tight text-ink">' + esc(value) + '</p>' +
+        (hint ? '<p class="mt-1 text-xs font-medium text-muted">' + esc(hint) + '</p>' : '') + '</div>';
+    }
+    return '<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">' +
+      tile('案件數', o.total) +
+      tile('未結案', o.open, o.total ? Math.round(o.open / o.total * 100) + '%' : '') +
+      tile('逾期未結', o.overdue) +
+      tile('平均結案天數', o.avgCloseDays == null ? '—' : o.avgCloseDays, o.closed ? '已結案 ' + o.closed + ' 張' : '') +
+    '</div>';
+  }
+
+  /** 讓 y 軸刻度落在好讀的整數上（1、2、5、10、20…） */
+  function niceMax(n) {
+    if (n <= 4) return Math.max(n, 1);
+    var p = Math.pow(10, Math.floor(Math.log10(n)));
+    var steps = [1, 2, 2.5, 5, 10];
+    for (var i = 0; i < steps.length; i++) if (steps[i] * p >= n) return steps[i] * p;
+    return 10 * p;
+  }
+
+  /**
+   * 近 12 個月「開了幾張 / 結了幾張」的分組直條圖。
+   * 純 HTML 畫：只有 24 根柱子，用不著圖表函式庫；數字另附表格版給要精確值的人。
+   */
+  function monthChart(months) {
+    var max = niceMax(months.reduce(function (m, x) { return Math.max(m, x.opened, x.closed); }, 0));
+    var H = 180;
+    var ticks = [0, max / 2, max];
+
+    function bar(v, color) {
+      var h = v ? Math.max(2, Math.round(v / max * H)) : 0;
+      return '<span class="block w-full max-w-[14px] rounded-t" style="height:' + h + 'px;background:' + color + '"></span>';
+    }
+
+    var cols = months.map(function (m, i) {
+      var mm = Number(m.month.slice(5));
+      var label = (i === 0 || mm === 1) ? m.month.slice(2, 4) + '/' + mm : mm + '月';
+      // 手機上 12 個標籤擠不下，只留隔月的；每根柱子還是 hover 得到完整月份
+      var labelCls = i % 2 ? ' hidden sm:inline' : '';
+      var tip = m.month + '　開單 ' + m.opened + '　結案 ' + m.closed;
+      return '<div class="group flex-1 min-w-0 flex flex-col items-center outline-none" data-tip="' + esc(tip) + '" tabindex="0">' +
+        '<div class="w-full flex items-end justify-center gap-[2px] rounded-t-lg px-0.5 transition-colors group-hover:bg-page group-focus:bg-page" style="height:' + H + 'px">' +
+          bar(m.opened, SERIES.opened) + bar(m.closed, SERIES.closed) +
+        '</div>' +
+        '<span class="mt-2 text-[10px] font-bold text-muted whitespace-nowrap' + labelCls + '">' + esc(label) + '</span>' +
+      '</div>';
+    }).join('');
+
+    var grid = ticks.map(function (t) {
+      return '<div class="absolute left-0 right-0 border-t border-[#F0F3F7]" style="bottom:' + (t / max * H) + 'px">' +
+        '<span class="absolute -left-8 -translate-y-1/2 w-6 text-right text-[10px] font-medium text-muted">' +
+        (Math.round(t * 10) / 10) + '</span></div>';
+    }).join('');
+
+    var legend = [['opened', '開單'], ['closed', '結案']].map(function (s) {
+      return '<span class="inline-flex items-center gap-1.5 text-xs font-bold text-ink2">' +
+        '<span class="w-2.5 h-2.5 rounded-sm" style="background:' + SERIES[s[0]] + '"></span>' + s[1] + '</span>';
+    }).join('');
+
+    var table = '<details class="mt-4"><summary class="text-xs font-bold text-ecoco-blue cursor-pointer select-none">看數字</summary>' +
+      '<div class="mt-2 overflow-x-auto"><table class="w-full text-sm">' +
+        '<thead><tr class="text-[10px] font-bold tracking-widest uppercase text-muted text-left">' +
+          '<th class="py-1.5 pr-4">月份</th><th class="py-1.5 pr-4 text-right">開單</th><th class="py-1.5 text-right">結案</th></tr></thead>' +
+        '<tbody>' + months.slice().reverse().map(function (m) {
+          return '<tr class="border-t border-[#F0F3F7] font-medium text-ink2"><td class="py-1.5 pr-4">' + esc(m.month) +
+            '</td><td class="py-1.5 pr-4 text-right">' + m.opened + '</td><td class="py-1.5 text-right">' + m.closed + '</td></tr>';
+        }).join('') + '</tbody></table></div></details>';
+
+    return '<div class="min-w-0 bg-white rounded-2xl border border-line shadow-sm p-5">' +
+      '<div class="flex items-center gap-4 flex-wrap mb-5">' +
+        '<p class="text-sm font-black text-ink">近 12 個月開單與結案</p>' +
+        '<div class="ml-auto flex gap-4">' + legend + '</div>' +
+      '</div>' +
+      '<div class="relative pl-8">' +
+        '<div class="absolute left-8 right-0 top-0" style="height:' + H + 'px">' + grid + '</div>' +
+        '<div class="relative flex gap-1 sm:gap-2">' + cols + '</div>' +
+      '</div>' + table + '</div>';
+  }
+
+  /** 依類型 / 廠商的表格。件數欄附一條橫條，只有一個系列，所以不需要圖例。 */
+  function groupTable(title, rows, keyLabel, note) {
+    rows = rows || [];
+    var max = rows.reduce(function (m, r) { return Math.max(m, r.total); }, 0) || 1;
+    var body = rows.length ? rows.map(function (r) {
+      var w = Math.max(2, Math.round(r.total / max * 100));
+      return '<tr class="border-t border-[#F0F3F7] text-sm font-medium text-ink2">' +
+        '<td class="py-2.5 pr-3 font-bold text-ink max-w-[10rem] truncate">' + esc(r.key) + '</td>' +
+        '<td class="py-2.5 pr-3 w-full min-w-[8rem]" data-tip="' + esc(r.key + '　' + r.total + ' 件（未結 ' + r.open + '）') + '">' +
+          '<div class="flex items-center gap-2">' +
+            '<span class="h-2 rounded-r" style="width:' + w + '%;background:' + SERIES.closed + '"></span>' +
+            '<span class="shrink-0 font-bold text-ink">' + r.total + '</span>' +
+          '</div></td>' +
+        '<td class="py-2.5 pr-3 text-right">' + r.open + '</td>' +
+        '<td class="py-2.5 pr-3 text-right">' + (r.overdue || '—') + '</td>' +
+        '<td class="py-2.5 text-right whitespace-nowrap">' + (r.avgCloseDays == null ? '—' : r.avgCloseDays + ' 天') + '</td>' +
+      '</tr>';
+    }).join('') : '<tr><td colspan="5" class="py-6 text-center text-sm font-medium text-muted">這段期間沒有資料</td></tr>';
+
+    // min-w-0：grid 子項預設不會比內容窄，不加的話寬表格會把整頁撐出水平捲軸
+    return '<div class="min-w-0 bg-white rounded-2xl border border-line shadow-sm p-5">' +
+      '<p class="text-sm font-black text-ink">' + esc(title) + '</p>' +
+      (note ? '<p class="mt-1 text-xs font-medium text-muted">' + esc(note) + '</p>' : '') +
+      '<div class="mt-3 overflow-x-auto"><table class="w-full">' +
+        '<thead><tr class="text-[10px] font-bold tracking-widest uppercase text-muted text-left">' +
+          '<th class="py-1.5 pr-3">' + esc(keyLabel) + '</th><th class="py-1.5 pr-3">件數</th>' +
+          '<th class="py-1.5 pr-3 text-right whitespace-nowrap">未結</th>' +
+          '<th class="py-1.5 pr-3 text-right whitespace-nowrap">逾期</th>' +
+          '<th class="py-1.5 text-right whitespace-nowrap">平均結案</th></tr></thead>' +
+        '<tbody>' + body + '</tbody></table></div></div>';
+  }
+
+  /* 圖表的 hover 提示：一個共用的浮動框，滑鼠或鍵盤聚焦到 [data-tip] 就顯示 */
+  var tipEl = null;
+  function showTip(target, x, y) {
+    if (!tipEl) {
+      tipEl = document.createElement('div');
+      tipEl.className = 'fixed z-[80] pointer-events-none bg-ink text-white text-xs font-bold rounded-lg px-3 py-2 shadow-panel whitespace-nowrap';
+      document.body.appendChild(tipEl);
+    }
+    tipEl.textContent = target.dataset.tip;
+    tipEl.style.display = 'block';
+    var r = tipEl.getBoundingClientRect();
+    var left = Math.min(Math.max(8, x - r.width / 2), window.innerWidth - r.width - 8);
+    tipEl.style.left = left + 'px';
+    tipEl.style.top = Math.max(8, y - r.height - 12) + 'px';
+  }
+  function hideTip() { if (tipEl) tipEl.style.display = 'none'; }
+
+  document.addEventListener('mousemove', function (e) {
+    var t = e.target.closest && e.target.closest('[data-tip]');
+    if (t) showTip(t, e.clientX, e.clientY); else hideTip();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target.closest && e.target.closest('[data-tip]');
+    if (!t) return hideTip();
+    var r = t.getBoundingClientRect();
+    showTip(t, r.left + r.width / 2, r.top);
+  });
+  window.addEventListener('hashchange', hideTip);
+
   /* ══════════════ 錯誤顯示 ══════════════ */
 
   function showError(box, err, replace) {
@@ -1319,6 +1669,7 @@
     var m = hash.match(/^#\/case\/(.+)$/);
     window.scrollTo(0, 0);
     if (m) return renderDetail(decodeURIComponent(m[1]));
+    if (hash === '#/stats') return renderStats();
 
     // 開站的第一次渲染直接用 session.login/resume 那趟帶回來的資料，不再多打 API
     var boot = Auth.takeBoot();
@@ -1326,7 +1677,9 @@
       state.stats = boot.stats || null;
       pendingMeta = boot.meta || null;
       applyMeta(pendingMeta);
-      return renderList(boot.list);
+      // boot 帶回來的是「沒有任何篩選」的第一頁；從詳情頁點「同料號看全部」進來時
+      // 已經帶著篩選了，拿那份來畫就會是錯的清單
+      if (!hasFilter()) return renderList(boot.list);
     }
     return renderList();
   }
@@ -1364,9 +1717,16 @@
     document.getElementById('btnNew').addEventListener('click', openNewCase);
   }
 
+  function hasFilter() {
+    var f = state.filter;
+    return !!(f.status || f.type || f.q || f.mine || f.voided);
+  }
+
   function applyMeta(meta) {
     if (!meta) return;
     state.members = meta.members || [];
+    // 類型以後端為準（試算表 Config.caseTypes），config.js 那份只是還沒登入前的預設值
+    if (Array.isArray(meta.caseTypes) && meta.caseTypes.length) window.CASE_TYPES = meta.caseTypes;
     if (meta.config && meta.config.sheetUrl && !window.CONFIG.SHEET_URL) {
       var el = document.getElementById('menuSheet');
       if (el) { el.href = meta.config.sheetUrl; el.classList.remove('hidden'); }

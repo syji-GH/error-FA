@@ -26,7 +26,7 @@ const SPREADSHEET_ID = 'REPLACE_ME';
 
 // 每次部署前手動 +1（或改成日期字串），doGet 會回傳這個版本號，
 // 一看就知道 /exec 上線的是哪一版，避免部署到錯的 deployment id 卻沒發現。
-const SCRIPT_VERSION = '2026-09-30.1';
+const SCRIPT_VERSION = '2026-09-30.3';
 
 // 案件描述 / 留言內容都是純文字（前端用 white-space:pre-wrap 顯示，自動連結網址），
 // 不接受也不需要 HTML，這裡只做長度上限保護。
@@ -150,6 +150,8 @@ const ACTIONS = {
   'cases.void': { auth: true, handler: casesVoid },
   'cases.unvoid': { auth: true, handler: casesUnvoid },
   'cases.stats': { auth: true, handler: casesStats },
+  'cases.export': { auth: true, handler: casesExport },
+  'cases.report': { auth: true, handler: casesReport },
 
   'comments.create': { auth: true, handler: commentsCreate },
   'comments.update': { auth: true, handler: commentsUpdate },
@@ -265,10 +267,10 @@ function buildBoot_(user, listPayload) {
  * 案件類型／狀態清單（來自 Config，可不改程式碼調整）、可指派的成員名單、Sheets 網址。
  */
 function metaBootstrap(user, payload) {
-  const caseTypesRaw = getConfig('caseTypes');
-  const statusesRaw = getConfig('statuses');
-  const caseTypes = caseTypesRaw ? caseTypesRaw.split(',') : CASE_TYPES;
-  const statuses = statusesRaw ? statusesRaw.split(',') : CASE_STATUSES;
+  // 類型跟後端驗證用同一份（caseTypes_）。狀態刻意不開放從 Config 改：
+  // 結案規則、統計卡、通知都綁著這四個固定值，改了名字那些邏輯會悄悄失效。
+  const caseTypes = caseTypes_();
+  const statuses = CASE_STATUSES;
 
   const members = readAll('Members')
     .filter(function (m) { return !(m.active === false || String(m.active).toUpperCase() === 'FALSE'); })
